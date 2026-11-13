@@ -9,18 +9,42 @@ APK="app/OscarTV-v1.1.6-premium-v13.apk"
 PKG="com.drama.mp4"
 ACT="com.drama.mp4/com.drama.mp4.ui.splash.SplashActivity"
 
+# v13-r2: pull failures are retried SEPARATELY from dump failures.
+# (v13 run 43431636163: the on-device dump succeeded but `adb pull`
+# silently failed, so artifacts had no screenshots/dumps at all.)
+pull_retry() {
+  local src="$1" dst="$2"
+  local i
+  for i in 1 2 3; do
+    if adb pull "$src" "$dst" 2>&1 | tee -a artifacts/capture.log; then
+      [ -s "$dst" ] && return 0
+    fi
+    echo "pull $src -> $dst attempt $i FAILED/empty, retrying" | tee -a artifacts/capture.log
+    sleep 5
+  done
+  echo "pull $src -> $dst FAILED after 3 attempts" | tee -a artifacts/capture.log
+  return 1
+}
+
 capture() {
   local tag="$1"
-  adb shell screencap -p "/sdcard/${tag}.png" 2>/dev/null
-  adb pull "/sdcard/${tag}.png" "artifacts/${tag}.png" 2>/dev/null || true
-  adb shell uiautomator dump "/sdcard/ui-${tag}.xml" 2>/dev/null
-  adb pull "/sdcard/ui-${tag}.xml" "artifacts/ui-${tag}.xml" 2>/dev/null || true
+  echo "== capture $tag ==" | tee -a artifacts/capture.log
+  # screenshot straight to host (no on-device file + pull round-trip)
+  adb exec-out screencap -p > "artifacts/${tag}.png" 2>>artifacts/capture.log || true
+  if [ ! -s "artifacts/${tag}.png" ]; then
+    echo "exec-out screencap empty for $tag, falling back to on-device file" | tee -a artifacts/capture.log
+    adb shell screencap -p "/sdcard/${tag}.png" 2>>artifacts/capture.log || true
+    pull_retry "/sdcard/${tag}.png" "artifacts/${tag}.png" || true
+  fi
+  adb shell uiautomator dump "/sdcard/ui-${tag}.xml" 2>>artifacts/capture.log || true
+  pull_retry "/sdcard/ui-${tag}.xml" "artifacts/ui-${tag}.xml" || true
   # retry the UI dump once if the pull produced nothing
   if [ ! -s "artifacts/ui-${tag}.xml" ]; then
     sleep 5
-    adb shell uiautomator dump "/sdcard/ui-${tag}.xml" 2>/dev/null
-    adb pull "/sdcard/ui-${tag}.xml" "artifacts/ui-${tag}.xml" 2>/dev/null || true
+    adb shell uiautomator dump "/sdcard/ui-${tag}.xml" 2>>artifacts/capture.log || true
+    pull_retry "/sdcard/ui-${tag}.xml" "artifacts/ui-${tag}.xml" || true
   fi
+  ls -la "artifacts/${tag}.png" "artifacts/ui-${tag}.xml" 2>&1 | tee -a artifacts/capture.log || true
 }
 
 echo "== installing APK =="

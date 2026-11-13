@@ -95,11 +95,39 @@ def pick_candidate(path):
     return c[0], c[1], f"bounds={b} text/id={t!r} class={n.get('class')}"
 
 
+def pull_retry(src, dst):
+    """adb pull with 3 attempts; v13 run proved a silent pull failure can
+    lose the only copy of a dump/screenshot."""
+    for i in (1, 2, 3):
+        r = subprocess.run(f"adb pull {src} {dst}", shell=True,
+                           capture_output=True, text=True)
+        out = (r.stdout + r.stderr).strip()
+        if out:
+            log.append(f"pull {src} attempt {i}: {out[:200]}")
+        if os.path.exists(dst) and os.path.getsize(dst) > 0:
+            return True
+        time.sleep(5)
+    log.append(f"pull {src} FAILED after 3 attempts")
+    return False
+
+
 def capture(tag):
-    run(f"adb shell screencap -p /sdcard/{tag}.png")
-    run(f"adb pull /sdcard/{tag}.png artifacts/{tag}.png")
+    # screenshot straight to host (no on-device file + pull round-trip)
+    with open(f"artifacts/{tag}.png", "wb") as f:
+        subprocess.run(f"adb exec-out screencap -p", shell=True, stdout=f,
+                       stderr=subprocess.DEVNULL)
+    if not (os.path.exists(f"artifacts/{tag}.png")
+            and os.path.getsize(f"artifacts/{tag}.png") > 0):
+        log.append(f"exec-out screencap empty for {tag}, fallback to file+pull")
+        run(f"adb shell screencap -p /sdcard/{tag}.png")
+        pull_retry(f"/sdcard/{tag}.png", f"artifacts/{tag}.png")
     run(f"adb shell uiautomator dump /sdcard/ui-{tag}.xml")
-    run(f"adb pull /sdcard/ui-{tag}.xml artifacts/ui-{tag}.xml")
+    pull_retry(f"/sdcard/ui-{tag}.xml", f"artifacts/ui-{tag}.xml")
+    if not (os.path.exists(f"artifacts/ui-{tag}.xml")
+            and os.path.getsize(f"artifacts/ui-{tag}.xml") > 0):
+        time.sleep(5)
+        run(f"adb shell uiautomator dump /sdcard/ui-{tag}.xml")
+        pull_retry(f"/sdcard/ui-{tag}.xml", f"artifacts/ui-{tag}.xml")
 
 
 def grep_d7(path):
