@@ -2,6 +2,9 @@
 # ShareMe mod smoke test: install, launch, screenshot, UI dump,
 # best-effort send/receive navigation + ad-activity scan, crash scan.
 # Adapted from the proven OscarTV smoke.sh (v13-r2 capture hardening).
+# Re-run note (2026-11-13): first run 43438116721 failed on infra only —
+# runner had no KVM permission, emulator never booted in 600s.
+# Boot timeout bumped to 900s in the workflow as insurance.
 # Two capture rounds (25s + 60s) + foreground-activity record, so a slow
 # first load still yields evidence; all captures best-effort, never fail job.
 set -u
