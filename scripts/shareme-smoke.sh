@@ -5,6 +5,11 @@
 # Re-run note (2026-11-13): first run 43438116721 failed on infra only —
 # runner had no KVM permission, emulator never booted in 600s.
 # Boot timeout bumped to 900s in the workflow as insurance.
+# Run 2 (43440854551) "succeeded" vacuously: boot took 893s (no KVM),
+# system_server then crashed in a loop, install failed "Broken pipe",
+# launch "Can't find service: activity", screenshots pure black, zero
+# midrop lines in logcat — the app never ran. Script now retries the
+# install once, verifies the package, and exits 1 honestly on failure.
 # Two capture rounds (25s + 60s) + foreground-activity record, so a slow
 # first load still yields evidence; all captures best-effort, never fail job.
 set -u
@@ -51,6 +56,25 @@ capture() {
 
 echo "== installing APK =="
 adb install -r "$APK" | tee artifacts/install.log
+# Run-2 lesson (43440854551): install FAILED with
+# "Failure calling service package: Broken pipe (32)" because
+# system_server was in a crash loop right after the slow no-KVM boot —
+# and the script still reported job SUCCESS with a vacuous
+# "NO FATAL CRASH" (the app had never run). Fix: retry once, verify the
+# package is really present, and FAIL THE JOB honestly if it is not.
+if ! grep -q "Success" artifacts/install.log; then
+  echo "install attempt 1 did NOT report Success, waiting 30s and retrying once" | tee -a artifacts/install.log
+  sleep 30
+  adb install -r "$APK" | tee -a artifacts/install.log
+fi
+if ! adb shell pm list packages 2>/dev/null | grep -q "package:${PKG}$"; then
+  echo "INSTALL FAILED (infra): ${PKG} not present after install attempts" | tee artifacts/verdict.txt
+  adb logcat -d > artifacts/logcat.txt || true
+  echo "== done (install failed, failing job honestly) =="
+  ls -la artifacts/
+  exit 1
+fi
+echo "install verified: ${PKG} present" | tee -a artifacts/install.log
 
 echo "== launching $ACT =="
 adb shell am start -n "$ACT"
