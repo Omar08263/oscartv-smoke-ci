@@ -100,8 +100,17 @@ sleep 5
 adb shell input tap 880 615 || true    # "Got it" on the full-screen hint
 sleep 3
 adb shell input tap 540 2190 || true   # "Agree" on the onboarding screen
-sleep 10
+# Run-4 lesson (43448472375): the taps worked — ANR dismissed, onboarding
+# passed — but home3 at +10s still showed the post-onboarding loading
+# splash; this emulator needs ~30s per screen transition. Wait longer and
+# take TWO post-onboarding captures. (uiautomator dumps are definitively
+# broken on this image — the DumpCommand itself FATAL-crashes with
+# "Timeout while connecting UiAutomation" — so screenshots are the
+# evidence channel; the dump-based Send/Receive tap cannot run here.)
+sleep 30
 capture home3
+sleep 30
+capture home4
 echo "== foreground after navigation =="
 adb shell dumpsys activity activities 2>/dev/null | grep -i "mResumedActivity\|mFocusedApp" | head -4 | tee -a artifacts/foreground.txt || true
 
