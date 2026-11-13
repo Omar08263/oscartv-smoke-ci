@@ -64,11 +64,14 @@ def center(node):
 
 
 def tap_capture(label, words, shot, dump):
-    home = "artifacts/ui-home2.xml"
-    node = find_node(home, words)
-    if node is None:
-        home = "artifacts/ui-home.xml"
-        node = find_node(home, words)
+    # Prefer the post-onboarding dump (home3), then the earlier rounds.
+    home = None
+    node = None
+    for cand in ["artifacts/ui-home3.xml", "artifacts/ui-home2.xml", "artifacts/ui-home.xml"]:
+        node = find_node(cand, words)
+        if node is not None:
+            home = cand
+            break
     if node is None:
         log.append(f"{label} button: NOT FOUND in home dumps (best effort only)")
         return False
@@ -90,7 +93,7 @@ def tap_capture(label, words, shot, dump):
 
 def main():
     # 1. ad-marker scan over every dump we have
-    for path in ["artifacts/ui-home.xml", "artifacts/ui-home2.xml",
+    for path in ["artifacts/ui-home3.xml", "artifacts/ui-home.xml", "artifacts/ui-home2.xml",
                  "artifacts/ui-send.xml", "artifacts/ui-receive.xml"]:
         data = read(path)
         if data is None:

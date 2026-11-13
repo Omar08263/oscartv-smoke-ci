@@ -87,6 +87,24 @@ capture home2
 echo "== foreground after 60s =="
 adb shell dumpsys activity activities 2>/dev/null | grep -i "mResumedActivity\|mFocusedApp" | head -4 | tee -a artifacts/foreground.txt || true
 
+echo "== dismiss system ANR dialog + pass onboarding (best effort) =="
+# Run-3 lesson (43444749807): install/launch/no-crash all OK, but the app
+# sat behind a "Process system isn't responding" ANR dialog (system_server
+# slow on the no-KVM runner; zero ANR in com.xiaomi.midrop itself) on the
+# first-run onboarding screen, and uiautomator returned a null root while
+# the dialog was up — so no dumps and no Send/Receive navigation.
+# Blind taps on the pixel_6 1080x2400 layout (harmless if the dialog is
+# absent — they land on non-clickable areas):
+adb shell input tap 325 1335 || true   # "Wait" on the ANR dialog
+sleep 5
+adb shell input tap 880 615 || true    # "Got it" on the full-screen hint
+sleep 3
+adb shell input tap 540 2190 || true   # "Agree" on the onboarding screen
+sleep 10
+capture home3
+echo "== foreground after navigation =="
+adb shell dumpsys activity activities 2>/dev/null | grep -i "mResumedActivity\|mFocusedApp" | head -4 | tee -a artifacts/foreground.txt || true
+
 adb logcat -d > artifacts/logcat.txt || true
 
 echo "== send/receive navigation + ad-activity scan (best effort) =="
