@@ -49,6 +49,15 @@ def pick_candidate(path):
     if not nodes:
         log.append(f"{path}: no nodes in dump")
         return None
+    # v13-r2 lesson: if the screen is a SYSTEM ANR dialog ("... isn't
+    # responding" with Close app / Wait), do NOT tap anything — the only
+    # clickables are the dialog's buttons, not movie items.
+    for n in nodes:
+        t = (n.get("text") or "") + " " + (n.get("content-desc") or "")
+        if "isn't responding" in t:
+            log.append(f"SYSTEM ANR DIALOG on screen ({t.strip()!r}) — refusing to tap")
+            globals()["ANR_ON_SCREEN"] = True
+            return None
     # Screen height from the largest bounds seen (fallback 2400)
     max_y = 0
     for n in nodes:
@@ -161,6 +170,8 @@ def main():
         x, y, reason = cand
         log.append(f"tapping movie item at ({x},{y}): {reason}")
         run(f"adb shell input tap {x} {y}")
+    elif globals().get("ANR_ON_SCREEN"):
+        log.append("no tap: system ANR dialog on screen (fallback tap skipped)")
     else:
         log.append("no movie item found; fallback tap at screen centre (540,900)")
         run("adb shell input tap 540 900")
