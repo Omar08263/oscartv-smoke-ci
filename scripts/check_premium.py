@@ -56,9 +56,18 @@ def grep_premium(path):
 
 
 def main():
-    node = find_profile_node("artifacts/ui-home.xml")
+    home = "artifacts/ui-home.xml"
+    if not __import__("os").path.exists(home):
+        home = "artifacts/ui-home2.xml"
+    node = find_profile_node(home)
     if node is None:
-        log.append("profile/ad-free button: NOT FOUND in ui-home.xml (best effort only)")
+        log.append(f"profile/ad-free button: NOT FOUND in {home} (best effort only)")
+        # fall back to the other capture round before giving up
+        other = "artifacts/ui-home2.xml" if home == "artifacts/ui-home.xml" else "artifacts/ui-home.xml"
+        node = find_profile_node(other)
+        if node is not None:
+            home = other
+            log.append(f"profile/ad-free button: found in {other} instead")
     else:
         c = center(node)
         if c:
@@ -71,12 +80,13 @@ def main():
             run("adb pull /sdcard/ui-profile.xml artifacts/ui-profile.xml")
         else:
             log.append("profile/ad-free button: found but no bounds, cannot tap")
-    for path in ["artifacts/ui-home.xml", "artifacts/ui-profile.xml"]:
+    for path in ["artifacts/ui-home.xml", "artifacts/ui-home2.xml", "artifacts/ui-profile.xml"]:
         try:
-            with open(path, encoding="utf-8", errors="ignore"):
-                pass
-            found = grep_premium(path)
-            log.append(f"{path}: premium markers found: {found if found else 'NONE'}")
+            with open(path, encoding="utf-8", errors="ignore") as f:
+                data = f.read()
+            found = [w for w in PREMIUM_WORDS if w in data]
+            err = "ERROR-STATE VISIBLE" if "حدث خطأ" in data else ""
+            log.append(f"{path}: premium markers found: {found if found else 'NONE'} {err}".rstrip())
         except FileNotFoundError:
             log.append(f"{path}: not present")
     with open(OUT, "w", encoding="utf-8") as f:
