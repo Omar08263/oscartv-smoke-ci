@@ -80,7 +80,7 @@ def main():
             run("adb pull /sdcard/ui-profile.xml artifacts/ui-profile.xml")
         else:
             log.append("profile/ad-free button: found but no bounds, cannot tap")
-    for path in ["artifacts/ui-home.xml", "artifacts/ui-home2.xml", "artifacts/ui-profile.xml"]:
+    for path in ["artifacts/ui-home.xml", "artifacts/ui-home2.xml", "artifacts/ui-detail.xml", "artifacts/ui-profile.xml"]:
         try:
             with open(path, encoding="utf-8", errors="ignore") as f:
                 data = f.read()

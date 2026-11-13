@@ -5,7 +5,7 @@
 # first load still yields evidence; all captures best-effort, never fail job.
 set -u
 mkdir -p artifacts
-APK="app/OscarTV-v1.1.6-premium.apk"
+APK="app/OscarTV-v1.1.6-premium-v13.apk"
 PKG="com.drama.mp4"
 ACT="com.drama.mp4/com.drama.mp4.ui.splash.SplashActivity"
 
@@ -36,6 +36,10 @@ sleep 35
 capture home2
 echo "== foreground after 60s =="
 adb shell dumpsys activity activities 2>/dev/null | grep -i "mResumedActivity\|mFocusedApp" | head -4 | tee -a artifacts/foreground.txt || true
+
+echo "== v13: tap a movie detail, capture [D7] screen (best effort) =="
+python3 scripts/tap_detail.py || true
+
 adb logcat -d > artifacts/logcat.txt || true
 
 echo "== profile/ad-free navigation + premium check (best effort) =="
