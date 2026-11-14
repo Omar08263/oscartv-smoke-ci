@@ -1,17 +1,28 @@
 name: tango-download
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - '.github/workflows/tango-download.yml'
+    inputs:
+      proxy_url:
+        description: 'HTTP proxy URL (optional, for mirrors that block datacenter IPs)'
+        required: false
+        default: ''
 jobs:
   download:
     runs-on: ubuntu-latest
     steps:
-      - name: Download Tango XAPK from APKFab (latest 9.84.6)
+      - name: Download Tango XAPK from APKFab
+        env:
+          PROXY_URL: ${{ inputs.proxy_url }}
         run: |
           UA="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
-          curl -sL -m 600 -A "$UA" -o tango-original.xapk "https://apkfab.com/tango-live-video-broadcasts/com.sgiggle.production/download?sha1=15d05ef1357ce1778db404cbd018a39ef29e424f" -w "HTTP:%{http_code} SIZE:%{size_download}\n"
+          URL="https://apkfab.com/tango-live-video-broadcasts/com.sgiggle.production/download?sha1=15d05ef1357ce1778db404cbd018a39ef29e424f"
+          if [ -n "$PROXY_URL" ]; then
+            echo "Downloading via proxy..."
+            curl -sL -m 600 -A "$UA" -x "$PROXY_URL" -o tango-original.xapk "$URL" -w "HTTP:%{http_code} SIZE:%{size_download}\n"
+          else
+            echo "Downloading direct..."
+            curl -sL -m 600 -A "$UA" -o tango-original.xapk "$URL" -w "HTTP:%{http_code} SIZE:%{size_download}\n"
+          fi
           ls -la tango-original.xapk
           file tango-original.xapk
           head -c 2 tango-original.xapk | od -An -tx1 | grep -q "50 4b" || (echo "NOT A ZIP/XAPK - first bytes:"; head -c 300 tango-original.xapk; exit 1)
