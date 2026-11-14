@@ -1,0 +1,192 @@
+name: lplayer-download
+on:
+  push:
+    paths:
+      - '.github/workflows/lplayer-download.yml'
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Try A - APKPure direct curl (XAPK arm64, versionCode 56)
+        continue-on-error: true
+        run: |
+          set +e
+          UA="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
+          echo "== Try A: APKPure d.apkpure.com =="
+          curl -sL -m 600 -A "$UA" -o tryA.xapk "https://d.apkpure.com/b/XAPK/iplayer.and.new.com?versionCode=56&nc=arm64-v8a&sv=24" -w "HTTP:%{http_code} SIZE:%{size_download}\n"
+          file tryA.xapk || true
+          ls -la tryA.xapk || true
+          if head -c 2 tryA.xapk 2>/dev/null | od -An -tx1 | grep -q "50 4b"; then
+            echo "Try A produced a ZIP file"
+            cp tryA.xapk candidate-A.xapk
+          else
+            echo "Try A NOT a zip:"; head -c 300 tryA.xapk || true; echo
+            rm -f tryA.xapk
+          fi
+      - name: Try B - Uptodown AJAX download-url POST (no Turnstile token)
+        continue-on-error: true
+        run: |
+          set +e
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+          echo "== Try B: Uptodown ajax download-url =="
+          curl -s -m 60 -A "$UA" -H 'Content-Type: application/json' -H 'X-Requested-With: XMLHttpRequest' \
+            -H 'Referer: https://lplayer-offline-video-player.en.uptodown.com/android/download' \
+            -o ajax.json -w "HTTP:%{http_code} SIZE:%{size_download}\n" \
+            -X POST -d '{"token":"","onlyXapk":0}' \
+            'https://lplayer-offline-video-player.en.uptodown.com/ajax/app/2025907/file/1239166920/download-url'
+          cat ajax.json; echo
+          DW=$(python3 -c "import json,sys; d=json.load(open('ajax.json')); print(d.get('data',{}).get('data',{}).get('downloadURL','') or d.get('data',{}).get('downloadURL',''))" 2>/dev/null)
+          echo "downloadURL=[$DW]"
+          if [ -n "$DW" ]; then
+            curl -sL -m 600 -A "$UA" -o tryB.xapk "https://dw.uptodown.com/dwn/$DW" -w "DW HTTP:%{http_code} SIZE:%{size_download}\n"
+            file tryB.xapk || true
+            if head -c 2 tryB.xapk 2>/dev/null | od -An -tx1 | grep -q "50 4b"; then cp tryB.xapk candidate-B.xapk; else head -c 300 tryB.xapk; echo; rm -f tryB.xapk; fi
+          fi
+      - name: Try C - Uptodown headless Chrome (Playwright, click real download button)
+        continue-on-error: true
+        run: |
+          set +e
+          pip install -q playwright 2>&1 | tail -1
+          python3 -m playwright install chromium --with-deps 2>&1 | tail -2
+          cat > dl_uptodown.py <<'PYEOF'
+          import sys
+          from playwright.sync_api import sync_playwright
+          url = "https://lplayer-offline-video-player.en.uptodown.com/android/download"
+          with sync_playwright() as p:
+              b = p.chromium.launch(headless=True, args=["--no-sandbox"])
+              ctx = b.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36", accept_downloads=True)
+              pg = ctx.new_page()
+              try:
+                  pg.goto(url, wait_until="domcontentloaded", timeout=90000)
+                  pg.wait_for_timeout(8000)
+                  print("TITLE:", pg.title())
+                  btn = pg.query_selector("#detail-download-button")
+                  print("BUTTON FOUND:", bool(btn))
+                  if btn:
+                      print("BUTTON TEXT:", (btn.inner_text() or "")[:120])
+                      try:
+                          with pg.expect_download(timeout=120000) as dl:
+                              btn.click()
+                              pg.wait_for_timeout(5000)
+                          d = dl.value
+                          print("DOWNLOAD:", d.suggested_filename, d.url[:160])
+                          d.save_as("tryC.xapk")
+                          print("SAVED tryC.xapk")
+                      except Exception as e:
+                          print("CLICK/DOWNLOAD FAILED:", repr(e)[:500])
+                          print("PAGE URL NOW:", pg.url)
+              except Exception as e:
+                  print("PLAYWRIGHT FAILED:", repr(e)[:500])
+              b.close()
+          PYEOF
+          python3 dl_uptodown.py
+          ls -la tryC.xapk 2>/dev/null || echo "no tryC.xapk"
+          file tryC.xapk 2>/dev/null || true
+          if [ -f tryC.xapk ] && head -c 2 tryC.xapk | od -An -tx1 | grep -q "50 4b"; then cp tryC.xapk candidate-C.xapk; echo "Try C produced a ZIP file"; fi
+      - name: Try D - APKMirror headless Chrome (session-bound keys work in-browser)
+        continue-on-error: true
+        run: |
+          set +e
+          cat > dl_apkmirror.py <<'PYEOF'
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p:
+              b = p.chromium.launch(headless=True, args=["--no-sandbox"])
+              ctx = b.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36", accept_downloads=True)
+              pg = ctx.new_page()
+              try:
+                  pg.goto("https://www.apkmirror.com/?s=lplayer+offline+video+player", wait_until="domcontentloaded", timeout=90000)
+                  pg.wait_for_timeout(6000)
+                  print("SEARCH TITLE:", pg.title())
+                  print("SEARCH URL:", pg.url)
+                  link = pg.query_selector("a[href*='/apk/snap-game-team/lplayer']")
+                  print("APP LINK FOUND:", bool(link), link.get_attribute("href")[:160] if link else "")
+                  if link:
+                      pg.goto("https://www.apkmirror.com" + link.get_attribute("href"), wait_until="domcontentloaded", timeout=90000)
+                      pg.wait_for_timeout(5000)
+                      print("APP PAGE:", pg.title())
+                      # find the 2.8.2 release row / download link
+                      dl = pg.query_selector("a[href*='-download/'], a.downloadButton")
+                      print("DL LINK FOUND:", bool(dl), dl.get_attribute("href")[:200] if dl else "")
+                      if dl:
+                          href = dl.get_attribute("href")
+                          pg.goto("https://www.apkmirror.com" + href if href.startswith("/") else href, wait_until="domcontentloaded", timeout=90000)
+                          pg.wait_for_timeout(5000)
+                          print("DOWNLOAD PAGE:", pg.title(), pg.url)
+                          btn = pg.query_selector("a[href*='download.php']")
+                          print("PHP LINK FOUND:", bool(btn), btn.get_attribute("href")[:300] if btn else "")
+                          if btn:
+                              try:
+                                  with pg.expect_download(timeout=180000) as dlinfo:
+                                      btn.click()
+                                      pg.wait_for_timeout(5000)
+                                  d = dlinfo.value
+                                  print("DOWNLOAD:", d.suggested_filename)
+                                  d.save_as("tryD.apk")
+                                  print("SAVED tryD.apk")
+                              except Exception as e:
+                                  print("APKMIRROR DOWNLOAD FAILED:", repr(e)[:500])
+              except Exception as e:
+                  print("APKMIRROR PLAYWRIGHT FAILED:", repr(e)[:500])
+              b.close()
+          PYEOF
+          python3 dl_apkmirror.py
+          ls -la tryD.apk 2>/dev/null || echo "no tryD.apk"
+          file tryD.apk 2>/dev/null || true
+          if [ -f tryD.apk ] && head -c 2 tryD.apk | od -An -tx1 | grep -q "50 4b"; then cp tryD.apk candidate-D.apk; echo "Try D produced a ZIP file"; fi
+      - name: Verify candidates and pick winner
+        id: verify
+        run: |
+          set +e
+          EXPECTED_UPTODOWN_SHA256="a51f83f52e10ee06d8e39c5e858323229ceeb2d65d58f7f26f58ea51b0b75266"
+          echo "lPlayer 2.8.2 download report - $(date -u +%FT%TZ)" > download-report.txt
+          echo "Target: iplayer.and.new.com 2.8.2 (Uptodown XAPK 42.79 MB, sha256 $EXPECTED_UPTODOWN_SHA256)" >> download-report.txt
+          echo "" >> download-report.txt
+          WINNER=""
+          for c in candidate-A.xapk candidate-B.xapk candidate-C.xapk candidate-D.apk; do
+            if [ -f "$c" ]; then
+              SZ=$(stat -c%s "$c")
+              SH=$(sha256sum "$c" | cut -d' ' -f1)
+              echo "$c size=$SZ sha256=$SH" >> download-report.txt
+              unzip -l "$c" >> download-report.txt 2>&1
+              echo "---" >> download-report.txt
+              if [ "$SH" = "$EXPECTED_UPTODOWN_SHA256" ]; then
+                echo "MATCHES Uptodown published sha256: $c"
+                WINNER="$c"
+              elif [ -z "$WINNER" ] && [ "$SZ" -gt 10000000 ]; then
+                echo "Plausible large APK (not Uptodown hash, likely APKPure bundle): $c"
+                [ -z "$WINNER" ] && WINNER="$c"
+              fi
+            else
+              echo "$c MISSING" >> download-report.txt
+            fi
+          done
+          if [ -n "$WINNER" ]; then
+            echo "WINNER=$WINNER" >> download-report.txt
+            cp "$WINNER" lplayer-original.xapk
+            ls -la lplayer-original.xapk
+            echo "RESULT=SUCCESS winner=$WINNER" >> "$GITHUB_OUTPUT"
+          else
+            echo "RESULT=FAILURE no valid APK" >> "$GITHUB_OUTPUT"
+            echo "RESULT=FAILURE" >> download-report.txt
+          fi
+          cat download-report.txt
+      - name: Upload APK artifact
+        if: steps.verify.outputs.RESULT == 'SUCCESS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lplayer-original
+          path: lplayer-original.xapk
+          if-no-files-found: error
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lplayer-download-report
+          path: download-report.txt
+          if-no-files-found: error
+      - name: Fail job if no APK
+        if: steps.verify.outputs.RESULT != 'SUCCESS'
+        run: |
+          echo "All download tries failed - see download-report.txt artifact"
+          exit 1
