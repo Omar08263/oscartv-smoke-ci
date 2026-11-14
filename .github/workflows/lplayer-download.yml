@@ -165,7 +165,8 @@ jobs:
             echo "WINNER=$WINNER" >> download-report.txt
             cp "$WINNER" lplayer-original.xapk
             ls -la lplayer-original.xapk
-            echo "RESULT=SUCCESS winner=$WINNER" >> "$GITHUB_OUTPUT"
+            echo "RESULT=SUCCESS" >> "$GITHUB_OUTPUT"
+            echo "WINNER=$WINNER" >> "$GITHUB_OUTPUT"
           else
             echo "RESULT=FAILURE no valid APK" >> "$GITHUB_OUTPUT"
             echo "RESULT=FAILURE" >> download-report.txt
