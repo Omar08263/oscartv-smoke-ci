@@ -7,50 +7,17 @@ jobs:
   download:
     runs-on: ubuntu-latest
     steps:
-      - name: Install Playwright
-        run: pip install playwright -q
-      - name: Download Tango via headless Chrome
+      - name: Download Tango 9.83.7 APK from APKMirror (direct download.php)
         run: |
-          cat > /tmp/dl_tango.py << 'PYEOF'
-          from playwright.sync_api import sync_playwright
-          url = "https://apkfab.com/tango-live-video-broadcasts/com.sgiggle.production/download?sha1=15d05ef1357ce1778db404cbd018a39ef29e424f"
-          with sync_playwright() as p:
-              browser = p.chromium.launch(channel="chrome", headless=True, args=["--no-sandbox"])
-              ctx = browser.new_context(accept_downloads=True)
-              page = ctx.new_page()
-              page.goto(url, timeout=90000)
-              page.wait_for_timeout(8000)
-              print("TITLE:", page.title())
-              print("URL:", page.url)
-              # list download-ish controls
-              btns = page.query_selector_all("button, a")
-              for b in btns:
-                  try:
-                      t = (b.inner_text() or "").strip()[:60]
-                      if t and ("download" in t.lower() or "dl" in (b.get_attribute("id") or "").lower()):
-                          print("CONTROL:", b.tag_name(), "id=", b.get_attribute("id"), "text=", t)
-                  except Exception:
-                      pass
-              # try clicking the main download trigger
-              target = page.query_selector("#dlBtn") or page.query_selector("button:has-text('Download')")
-              if not target:
-                  print("NO DOWNLOAD BUTTON FOUND")
-                  print(page.content()[:2000])
-                  raise SystemExit(1)
-              print("CLICKING download trigger...")
-              with page.expect_download(timeout=240000) as dl:
-                  target.click()
-              download = dl.value
-              download.save_as("tango-original.xapk")
-              print("SAVED:", download.suggested_filename)
-              browser.close()
-          PYEOF
-          python3 /tmp/dl_tango.py
-          ls -la tango-original.xapk
-          file tango-original.xapk
-      - name: Upload XAPK artifact
+          UA="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
+          URL="https://www.apkmirror.com/wp-content/themes/APKMirror/download.php?id=16894687&key=6ec64eb0ffba911c9e8c5441dece03469d6555c9"
+          curl -sL -m 600 -A "$UA" -e "https://www.apkmirror.com/apk/tango/tango-tango/tango-live-stream-video-chat-9-83-7-release/tango-live-stream-video-chat-9-83-7-android-apk-download/" -o tango-original.apk "$URL" -w "HTTP:%{http_code} SIZE:%{size_download}\n"
+          ls -la tango-original.apk
+          file tango-original.apk
+          head -c 2 tango-original.apk | od -An -tx1 | grep -q "50 4b" || (echo "NOT A ZIP/APK - first bytes:"; head -c 300 tango-original.apk; exit 1)
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tango-original-xapk
-          path: tango-original.xapk
+          name: tango-original-apk
+          path: tango-original.apk
           if-no-files-found: error
