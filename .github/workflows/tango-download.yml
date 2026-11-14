@@ -1,0 +1,24 @@
+name: tango-download
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/tango-download.yml'
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Tango APK from APKPure
+        run: |
+          UA="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
+          curl -sL -m 300 -A "$UA" -o tango-original.apk "https://apkpure.com/tango-live-video-broadcast/com.sgiggle.production/download" -w "HTTP:%{http_code} SIZE:%{size_download}\n"
+          ls -la tango-original.apk
+          file tango-original.apk
+          # fail loudly if it's not an APK
+          head -c 2 tango-original.apk | od -An -tx1 | grep -q "50 4b" || (echo "NOT A ZIP/APK - first bytes:"; head -c 300 tango-original.apk; exit 1)
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tango-original-apk
+          path: tango-original.apk
+          if-no-files-found: error
