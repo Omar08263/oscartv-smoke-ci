@@ -45,6 +45,8 @@ capture() {
 
 echo "== installing APK =="
 adb install -r "$APK" | tee artifacts/install.log
+echo "install exit: ${PIPESTATUS[0]}" | tee -a artifacts/install.log
+adb shell pm list packages | grep -i "iplayer" | tee -a artifacts/install.log || true
 
 echo "== launching $ACT =="
 adb shell am start -n "$ACT"
@@ -52,6 +54,15 @@ sleep 25
 capture home
 echo "== foreground after 25s =="
 adb shell dumpsys activity activities 2>/dev/null | grep -i "mResumedActivity\|mFocusedApp" | head -4 | tee artifacts/foreground.txt || true
+# If the app is not in the foreground (e.g. a system ANR dialog stole focus),
+# dismiss any ANR dialog and retry the launch once.
+if ! grep -q "iplayer.and.new.com" artifacts/foreground.txt; then
+  echo "== app not in foreground, dismissing dialogs + relaunching ==" | tee -a artifacts/foreground.txt
+  adb shell input keyevent KEYCODE_BACK || true
+  adb shell am start -n "$ACT" || true
+  sleep 15
+  adb shell dumpsys activity activities 2>/dev/null | grep -i "mResumedActivity\|mFocusedApp" | head -4 | tee -a artifacts/foreground.txt || true
+fi
 sleep 35
 capture home2
 echo "== foreground after 60s =="
