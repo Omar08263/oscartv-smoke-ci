@@ -1,0 +1,30 @@
+name: kolnovel-smoke-arm64
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-smoke-arm64.yml'
+      - 'scripts/kolnovel-smoke-arm64.sh'
+  workflow_dispatch:
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Smoke test on ARM64 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: arm64-v8a
+          profile: pixel_6
+          emulator-boot-timeout: 3600
+          script: bash scripts/kolnovel-smoke-arm64.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-smoke-arm64-artifacts
+          path: artifacts/
