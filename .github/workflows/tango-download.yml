@@ -8,17 +8,18 @@ jobs:
   download:
     runs-on: ubuntu-latest
     steps:
-      - name: Download Tango APK from APKPure
+      - name: Download Tango XAPK from APKFab (latest 9.84.6)
         run: |
           UA="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
-          curl -sL -m 300 -A "$UA" -o tango-original.apk "https://apkpure.com/tango-live-video-broadcast/com.sgiggle.production/download" -w "HTTP:%{http_code} SIZE:%{size_download}\n"
-          ls -la tango-original.apk
-          file tango-original.apk
-          # fail loudly if it's not an APK
-          head -c 2 tango-original.apk | od -An -tx1 | grep -q "50 4b" || (echo "NOT A ZIP/APK - first bytes:"; head -c 300 tango-original.apk; exit 1)
-      - name: Upload APK artifact
+          curl -sL -m 600 -A "$UA" -o tango-original.xapk "https://apkfab.com/tango-live-video-broadcasts/com.sgiggle.production/download?sha1=15d05ef1357ce1778db404cbd018a39ef29e424f" -w "HTTP:%{http_code} SIZE:%{size_download}\n"
+          ls -la tango-original.xapk
+          file tango-original.xapk
+          head -c 2 tango-original.xapk | od -An -tx1 | grep -q "50 4b" || (echo "NOT A ZIP/XAPK - first bytes:"; head -c 300 tango-original.xapk; exit 1)
+          echo "== XAPK contents =="
+          unzip -l tango-original.xapk | head -30
+      - name: Upload XAPK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tango-original-apk
-          path: tango-original.apk
+          name: tango-original-xapk
+          path: tango-original.xapk
           if-no-files-found: error
