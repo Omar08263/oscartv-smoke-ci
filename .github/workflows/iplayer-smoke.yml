@@ -1,0 +1,30 @@
+name: iplayer-smoke
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/iPlayer-v2.8.2-premium.apk'
+      - 'scripts/smoke-iplayer.sh'
+      - '.github/workflows/iplayer-smoke.yml'
+  workflow_dispatch:
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Smoke test on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          script: bash scripts/smoke-iplayer.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iplayer-smoke-artifacts
+          path: artifacts/
