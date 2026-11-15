@@ -622,9 +622,9 @@ function sendStepSync(stepId, action, payload) {
             if (!mediaTypeLogged) { wlog('SEND', 'content-type=' + mtStr + ' (observed=' + (ct || 'none') + ') mode=sync-fallback'); mediaTypeLogged = true; }
             var MediaType = Java.use('okhttp3.MediaType');
             var mt = MediaType.parse(mtStr);
-            var TimeUnit = Java.use('java.util.concurrent.TimeUnit');
+            var Duration = Java.use('java.time.Duration');
             var Builder = Java.use('okhttp3.OkHttpClient$Builder');
-            var client = Builder.$new().connectTimeout(10, TimeUnit.SECONDS).readTimeout(10, TimeUnit.SECONDS).build();
+            var client = Builder.$new().connectTimeout(Duration.ofSeconds(10)).readTimeout(Duration.ofSeconds(10)).build();
             var Request = Java.use('okhttp3.Request');
             var reqBuilder = Java.use('okhttp3.Request$Builder').$new();
             reqBuilder.url(template.url);
@@ -668,9 +668,9 @@ function sendStep(stepId, action, payload) {
             if (!mediaTypeLogged) { wlog('SEND', 'content-type=' + mtStr + ' (observed=' + (ct || 'none') + ') mode=async-enqueue'); mediaTypeLogged = true; }
             var MediaType = Java.use('okhttp3.MediaType');
             var mt = MediaType.parse(mtStr);
-            var TimeUnit = Java.use('java.util.concurrent.TimeUnit');
+            var Duration = Java.use('java.time.Duration');
             var Builder = Java.use('okhttp3.OkHttpClient$Builder');
-            var client = Builder.$new().connectTimeout(10, TimeUnit.SECONDS).readTimeout(10, TimeUnit.SECONDS).build();
+            var client = Builder.$new().connectTimeout(Duration.ofSeconds(10)).readTimeout(Duration.ofSeconds(10)).build();
             var Request = Java.use('okhttp3.Request');
             var reqBuilder = Java.use('okhttp3.Request$Builder').$new();
             reqBuilder.url(template.url);
