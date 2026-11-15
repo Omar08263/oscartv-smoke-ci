@@ -1,0 +1,27 @@
+name: kolnovel-redroid
+# Kolnovel mod on REAL arm64 Android userspace (Redroid) — no KVM needed.
+# Runner: GitHub-hosted ubuntu-24.04-arm (native ARM64 host). Redroid's arm64
+# image runs the app's arm64-v8a .so files natively, unlike the x86_64
+# emulator (SoLoader ABI failure) and unlike the arm64 SDK emulator on an
+# x86_64 host (TCG, never boots — run 43612078938).
+# Triggered by pushing this file or the script (no Actions:write needed).
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid.yml'
+      - 'scripts/kolnovel-redroid.sh'
+  workflow_dispatch:
+jobs:
+  redroid:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid smoke test (install + launch + logcat)
+        run: bash scripts/kolnovel-redroid.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-redroid-artifacts
+          path: artifacts/
