@@ -1,0 +1,32 @@
+name: snapchat-redroid-orig
+# Snapchat ORIGINAL FouadSnap 13.70.0.49 (CONTROL) on REAL arm64 Android userspace (Redroid).
+# Runner: GitHub-hosted ubuntu-24.04-arm (native ARM64 host). Redroid's arm64
+# image runs arm64 .so files natively, no KVM needed (proven path: kolnovel).
+# APK (194 MB) is fetched from a GitHub release asset, NOT pushed to git.
+# Proves (CONTROL): does the ORIGINAL crash at login the same way as v2, or is the v2 crash new? Also: does the original hijack fire here (browser open + exit) as a positive control for the redirect scan. NO
+# exit on launch) + 0 FATAL for the app + no ads visible on screens reachable
+# without login. NO sign-in — stop at the login screen. Login-gated behaviour
+# (in-app ads behind login, Play Integrity) cannot be proven here; Omar's
+# on-device test on a THROWAWAY account is the final arbiter.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/snapchat-redroid-orig.yml'
+      - 'scripts/snapchat-redroid-orig.sh'
+  workflow_dispatch:
+jobs:
+  redroid:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid CONTROL — Snapchat ORIGINAL FouadSnap (install + launch + logcat)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/snapchat-redroid-orig.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: snapchat-redroid-orig-artifacts
+          path: artifacts/
