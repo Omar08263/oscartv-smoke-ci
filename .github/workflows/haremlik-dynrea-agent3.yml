@@ -1,0 +1,55 @@
+name: haremlik-dynrea-agent3
+# Haremlik Al-Sultan (com.dc.hwsj 7.804) — DYNAMIC REA agent3 probe: Redroid
+# (real arm64 Android userspace, ubuntu-24.04-arm, NO KVM) + Frida live
+# instrumentation. Boots Redroid, installs base v4 APK + PAD1 via
+# install-multiple, pushes the matching frida-server, attaches the baseline
+# Frida script, drives the game to home with the proven v4 story walk, and
+# captures PLAINTEXT gateway traffic + runtime logs as artifacts.
+#
+# Why Frida (not mitmproxy): the gateway traffic is app-layer encrypted
+# with KSecure ChaCha20 (KSInterceptor, header Gw-Encrypt-Type: chacha20) —
+# plain mitmproxy sees only ciphertext. The baseline script hooks
+# KSecureValidation.flip(KSNetMeta): dir=1 OUT logs the plaintext request
+# JSON before encryption, dir=0 IN logs the plaintext response JSON after
+# decryption. See scripts/frida/haremlik-dynrea-baseline.js.
+#
+# APKs are fetched from the GitHub release assets on tag
+# haremlik-mod-7.804-v4 (too big for a git push), same as the v4 Redroid
+# run 43718144020. NO sign-in, NO real-money purchase, NO forged receipt.
+# Sibling probe agents run their own Frida scripts on this infra — see
+# work/dynrea/infra/READY.md (repo path: haremlik-mod/work/dynrea/).
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/haremlik-dynrea-agent3.yml'
+      - 'scripts/dynrea-agent3/*.js'
+  workflow_dispatch:
+    inputs:
+      frida_script:
+        description: 'Frida script in the repo to attach (e.g. scripts/frida/haremlik-dynrea-baseline.js)'
+        required: false
+        default: 'scripts/dynrea-agent3/haremlik-dynrea-agent3.js'
+        type: string
+      soak_seconds:
+        description: 'Seconds to hold at home with Frida attached after the story walk'
+        required: false
+        default: '90'
+        type: string
+jobs:
+  dynrea:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid + Frida dynamic REA — Haremlik v4 (install + launch + home + plaintext traffic)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FRIDA_SCRIPT: ${{ inputs.frida_script || 'scripts/dynrea-agent3/haremlik-dynrea-agent3.js' }}
+          SOAK_SECONDS: ${{ inputs.soak_seconds || '90' }}
+        run: bash scripts/haremlik-dynrea.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: haremlik-dynrea-agent3-artifacts
+          path: artifacts/
