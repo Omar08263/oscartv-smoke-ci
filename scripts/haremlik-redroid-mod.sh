@@ -89,11 +89,18 @@
 # ROUND 2 (this run): after home is reached, the old profile tap is
 # REPLACED — the (70,90) avatar tap opened the challenge letter, not the
 # profile. Round 2: dismiss the letter (367,616 open, 360,700 close,
-# verify gone vs home) -> tap top-row VIP button (570,105) -> Commerce
-# -> tap best-guess VIP tab (382,187, tab 3) -> tap VIP badge (100,310)
-# [gold vip button (680,90) fallback] -> Privilege dialog, scroll for
-# the caps rows -> force-stop + relaunch persistence check. NEVER tap
-# purchase/claim/buy. Same APK/PAD1, same install + story walk as v4.
+# verify gone vs the OPEN shot) -> DIALOGUE-CLEARING LOOP (closing the
+# letter starts a Piyale/Neil Burch cutscene — run 43756488887 proved every
+# later tap was swallowed as a dialogue advance; tap "»" (680,1235) until
+# the story_page detector reads OTHER, up to 30 taps) -> tap top-row VIP
+# button (570,105) -> Commerce (gate: BIG vs cleared-home shot AND story
+# detector OTHER, one retry, else stop the phase) -> tap VIP tab 3
+# (382,187) -> Privilege dialog via the VIP-tab badge / gold vip button
+# (vipView.lua initTop/initPreview — see ROUND 2c below; the literal
+# (100,310)/(680,90) points are NOT reused: they were the run-2b taps that
+# landed on the home left-icon column / Glorious Rush) -> force-stop +
+# relaunch persistence check. NEVER tap purchase/claim/buy. Same APK/PAD1,
+# same install + story walk as v4.
 set -u
 mkdir -p artifacts
 exec > >(tee artifacts/run.log) 2>&1
@@ -810,8 +817,11 @@ PYEOF
   # anywhere on home, so it must be dismissed + verified gone first.)
   # NEVER tap any purchase/claim/buy button in the dialog or the VIP tab.
   LETTER_DISMISSED=no
+  DIALOGUE_CLEARED=no
+  COMMERCE_LOADED=no
   VIP_TAB_REACHED=no
   PRIVILEGE_OPENED=no
+  PRIVILEGE_SHOT=unknown
   RELAUNCH_HOME=no
   RELAUNCH_VIP16=unknown
   PROFILE_TAPPED=no
@@ -825,77 +835,156 @@ PYEOF
     echo "letter close tap sent (360,700)" | tee -a artifacts/launch.log
     sleep 5
     adb -s "$DEV" exec-out screencap -p > artifacts/screen-letter-closed.png 2>/dev/null || true
-    LETTER_DIFF=$(python3 /tmp/scene_diff.py artifacts/screen-home.png artifacts/screen-letter-closed.png 2>artifacts/detector-diff-letter.log || echo DIFF_FAIL)
-    if [ "$LETTER_DIFF" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-letter-closed.png:"; cat artifacts/detector-diff-letter.log; LETTER_DIFF=BIG; fi
-    echo "letter-closed vs home scene-diff = $LETTER_DIFF (SAME = letter gone, back to home with the scroll)" | tee -a artifacts/launch.log
+    # FIX (run 43756488887 verification §5): letter_dismissed must be set
+    # from the letter-CLOSED shot differing from the letter-OPEN shot
+    # (parchment gone = BIG), NOT from a diff vs home — the old vs-home
+    # check read BIG (dialogue started) as "letter still open".
+    LETTER_DIFF=$(python3 /tmp/scene_diff.py artifacts/screen-letter-open.png artifacts/screen-letter-closed.png 2>artifacts/detector-diff-letter.log || echo DIFF_FAIL)
+    if [ "$LETTER_DIFF" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-letter-closed.png:"; cat artifacts/detector-diff-letter.log; LETTER_DIFF=SAME; fi
+    echo "letter-closed vs letter-open scene-diff = $LETTER_DIFF (BIG = parchment gone, letter dismissed)" | tee -a artifacts/launch.log
     if [ "$LETTER_DIFF" = "BIG" ]; then
+      LETTER_DISMISSED=yes
+    else
       echo "letter may still be open — tapping parchment once more (360,700)" | tee -a artifacts/launch.log
       adb -s "$DEV" shell input tap 360 700 2>&1 || true
       sleep 5
       adb -s "$DEV" exec-out screencap -p > artifacts/screen-letter-closed-2.png 2>/dev/null || true
-      LETTER_DIFF2=$(python3 /tmp/scene_diff.py artifacts/screen-home.png artifacts/screen-letter-closed-2.png 2>artifacts/detector-diff-letter2.log || echo DIFF_FAIL)
-      if [ "$LETTER_DIFF2" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-letter-closed-2.png:"; cat artifacts/detector-diff-letter2.log; LETTER_DIFF2=BIG; fi
-      echo "letter-closed-2 vs home scene-diff = $LETTER_DIFF2" | tee -a artifacts/launch.log
-      [ "$LETTER_DIFF2" = "SAME" ] && LETTER_DISMISSED=yes
-    else
-      LETTER_DISMISSED=yes
+      LETTER_DIFF2=$(python3 /tmp/scene_diff.py artifacts/screen-letter-open.png artifacts/screen-letter-closed-2.png 2>artifacts/detector-diff-letter2.log || echo DIFF_FAIL)
+      if [ "$LETTER_DIFF2" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-letter-closed-2.png:"; cat artifacts/detector-diff-letter2.log; LETTER_DIFF2=SAME; fi
+      echo "letter-closed-2 vs letter-open scene-diff = $LETTER_DIFF2" | tee -a artifacts/launch.log
+      [ "$LETTER_DIFF2" = "BIG" ] && LETTER_DISMISSED=yes
     fi
     echo "letter_dismissed=$LETTER_DISMISSED" | tee -a artifacts/launch.log
-    echo "== ROUND 2b: VIP / COMMERCE — tap top-row VIP button (570,105) =="
+    echo "== ROUND 2a2: DIALOGUE-CLEARING LOOP (run 43756488887 root cause: closing the letter starts a Piyale/Neil Burch cutscene, and every later tap was swallowed as a dialogue advance — clear it BEFORE any Commerce tap) =="
+    DIALOGUE_TAPS=0
+    DIALOGUE_SHOT="artifacts/screen-letter-closed.png"
+    [ -s artifacts/screen-letter-closed-2.png ] && DIALOGUE_SHOT="artifacts/screen-letter-closed-2.png"
+    DLG_PAGE=$(python3 /tmp/story_page.py "$DIALOGUE_SHOT" 2>artifacts/detector-dialogue-start.log || echo DETECTOR_FAIL)
+    if [ "$DLG_PAGE" = "DETECTOR_FAIL" ]; then echo "!!! STORY DETECTOR FAILED on $DIALOGUE_SHOT — failing loudly (see artifacts/detector-dialogue-start.log):"; cat artifacts/detector-dialogue-start.log; DETECTOR_FAILED=yes; fi
+    echo "dialogue check on $DIALOGUE_SHOT: story-page=$DLG_PAGE (STORY = a cutscene dialogue is still open)" | tee -a artifacts/launch.log
+    if [ "$DLG_PAGE" = "STORY" ]; then
+      for N in $(seq 1 30); do
+        adb -s "$DEV" shell input tap 680 1235 2>&1 || true
+        DIALOGUE_TAPS=$((DIALOGUE_TAPS + 1))
+        sleep 12
+        adb -s "$DEV" exec-out screencap -p > artifacts/screen-clear-$N.png 2>/dev/null || true
+        DLG_PAGE=$(python3 /tmp/story_page.py "artifacts/screen-clear-$N.png" 2>artifacts/detector-clear-$N.log || echo DETECTOR_FAIL)
+        if [ "$DLG_PAGE" = "DETECTOR_FAIL" ]; then echo "!!! STORY DETECTOR FAILED on screen-clear-$N.png — stopping the clearing loop (see artifacts/detector-clear-$N.log):"; cat artifacts/detector-clear-$N.log; DETECTOR_FAILED=yes; break; fi
+        echo "dialogue-clear tap $N/30: story-page=$DLG_PAGE $(cat artifacts/detector-clear-$N.log 2>/dev/null)" | tee -a artifacts/launch.log
+        if [ "$DLG_PAGE" = "OTHER" ]; then
+          DIALOGUE_CLEARED=yes
+          echo "dialogue cleared after $DIALOGUE_TAPS taps" | tee -a artifacts/launch.log
+          break
+        fi
+      done
+      [ "$DIALOGUE_CLEARED" = "no" ] && echo "dialogue STILL open after 30 clearing taps — proceeding to the Commerce tap anyway; the Commerce gate below will decide (do not tap blindly further if it fails)" | tee -a artifacts/launch.log
+    else
+      echo "no dialogue open after the letter close — skipping the clearing loop" | tee -a artifacts/launch.log
+      DIALOGUE_CLEARED=yes
+    fi
+    adb -s "$DEV" exec-out screencap -p > artifacts/screen-dialogue-cleared.png 2>/dev/null || true
+    ls -la artifacts/screen-dialogue-cleared.png 2>&1 || true
+    DLG_PAGE_FINAL=$(python3 /tmp/story_page.py artifacts/screen-dialogue-cleared.png 2>artifacts/detector-dialogue-cleared.log || echo DETECTOR_FAIL)
+    if [ "$DLG_PAGE_FINAL" = "DETECTOR_FAIL" ]; then echo "story detector FAILED on screen-dialogue-cleared.png (see artifacts/detector-dialogue-cleared.log):"; cat artifacts/detector-dialogue-cleared.log; fi
+    echo "final dialogue check on screen-dialogue-cleared.png: story-page=$DLG_PAGE_FINAL" | tee -a artifacts/launch.log
+    [ "$DLG_PAGE_FINAL" = "OTHER" ] && DIALOGUE_CLEARED=yes
+    [ "$DLG_PAGE_FINAL" = "STORY" ] && DIALOGUE_CLEARED=no
+    echo "dialogue_cleared=$DIALOGUE_CLEARED (taps=$DIALOGUE_TAPS)" | tee -a artifacts/launch.log
+    echo "== ROUND 2b: VIP / COMMERCE — tap top-row VIP button (570,105) ONLY after the dialogue is cleared =="
     adb -s "$DEV" shell input tap 570 105 2>&1 || true
     echo "VIP button tap sent (570,105)" | tee -a artifacts/launch.log
     sleep 12
     adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running after VIP tap"
     adb -s "$DEV" exec-out screencap -p > artifacts/screen-commerce.png 2>/dev/null || true
     ls -la artifacts/screen-commerce.png 2>&1 || true
-    echo "== ROUND 2b2: VIP TAB — best guess is tab 3 at (382,187) =="
-    echo "tab layout (commerceScene.lua initTab): tab i centre x = 92 + 145*(i-1), y = TOP_MOVE_Y + 120 + 67 (~187 if TOP_MOVE_Y=0); default-tab priority TreasurePavilion -> ExchangeShop -> VIP, so VIP is most likely the LAST tab. Operator verifies from screen-commerce-vip.png." | tee -a artifacts/launch.log
-    adb -s "$DEV" shell input tap 382 187 2>&1 || true
-    echo "VIP-tab tap sent (382,187)" | tee -a artifacts/launch.log
-    sleep 5
-    adb -s "$DEV" exec-out screencap -p > artifacts/screen-commerce-vip.png 2>/dev/null || true
-    ls -la artifacts/screen-commerce-vip.png 2>&1 || true
-    VIP_TAB_DIFF=$(python3 /tmp/scene_diff.py artifacts/screen-commerce.png artifacts/screen-commerce-vip.png 2>artifacts/detector-diff-viptab.log || echo DIFF_FAIL)
-    if [ "$VIP_TAB_DIFF" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-commerce-vip.png:"; cat artifacts/detector-diff-viptab.log; VIP_TAB_DIFF=SAME; fi
-    echo "commerce-vip vs commerce scene-diff = $VIP_TAB_DIFF (BIG = a tab switch happened; SAME = either already on VIP [no-op] or tap missed — operator verifies from the pixels)" | tee -a artifacts/launch.log
-    COMMERCE_DIFF=$(python3 /tmp/scene_diff.py artifacts/screen-home.png artifacts/screen-commerce.png 2>artifacts/detector-diff-commerce.log || echo DIFF_FAIL)
-    if [ "$COMMERCE_DIFF" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-commerce.png:"; cat artifacts/detector-diff-commerce.log; COMMERCE_DIFF=BIG; fi
-    echo "commerce vs home scene-diff = $COMMERCE_DIFF (BIG = we left home and entered Commerce)" | tee -a artifacts/launch.log
-    # Heuristic only: Commerce entered (BIG vs home) + best-guess VIP tab
-    # tapped. The operator's pixel read of screen-commerce-vip.png is
-    # authoritative — the script cannot read which tab is selected.
-    if [ "$COMMERCE_DIFF" = "BIG" ]; then VIP_TAB_REACHED=yes; fi
-    echo "vip_tab_reached (heuristic, operator verifies): $VIP_TAB_REACHED" | tee -a artifacts/launch.log
-    echo "== ROUND 2c: PRIVILEGE DIALOG — tap VIP badge top-left of VIP tab (100,310) =="
-    echo "badge coords (vipView.lua initTop): gTop at (360, 310+TOP_MOVE_Y), btnVipLv at x=100 -> (100,310). Gold 'vip' preview button fallback at (680,90)." | tee -a artifacts/launch.log
-    adb -s "$DEV" shell input tap 100 310 2>&1 || true
-    echo "VIP badge tap sent (100,310)" | tee -a artifacts/launch.log
-    sleep 5
-    adb -s "$DEV" exec-out screencap -p > artifacts/screen-privilege.png 2>/dev/null || true
-    ls -la artifacts/screen-privilege.png 2>&1 || true
-    PRIV_DIFF=$(python3 /tmp/scene_diff.py artifacts/screen-commerce-vip.png artifacts/screen-privilege.png 2>artifacts/detector-diff-priv.log || echo DIFF_FAIL)
-    if [ "$PRIV_DIFF" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-privilege.png:"; cat artifacts/detector-diff-priv.log; PRIV_DIFF=BIG; fi
-    echo "privilege vs commerce-vip scene-diff = $PRIV_DIFF (BIG = dialog likely opened)" | tee -a artifacts/launch.log
-    if [ "$PRIV_DIFF" = "BIG" ]; then
-      PRIVILEGE_OPENED=yes
-    else
-      echo "badge tap changed nothing — trying gold 'vip' preview button top-right (680,90)" | tee -a artifacts/launch.log
-      adb -s "$DEV" shell input tap 680 90 2>&1 || true
-      sleep 5
-      adb -s "$DEV" exec-out screencap -p > artifacts/screen-privilege-gold.png 2>/dev/null || true
-      ls -la artifacts/screen-privilege-gold.png 2>&1 || true
-      PRIV_DIFF2=$(python3 /tmp/scene_diff.py artifacts/screen-commerce-vip.png artifacts/screen-privilege-gold.png 2>artifacts/detector-diff-priv-gold.log || echo DIFF_FAIL)
-      if [ "$PRIV_DIFF2" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-privilege-gold.png:"; cat artifacts/detector-diff-priv-gold.log; PRIV_DIFF2=SAME; fi
-      echo "privilege-gold vs commerce-vip scene-diff = $PRIV_DIFF2" | tee -a artifacts/launch.log
-      [ "$PRIV_DIFF2" = "BIG" ] && PRIVILEGE_OPENED=yes
+    COMMERCE_DIFF=$(python3 /tmp/scene_diff.py artifacts/screen-dialogue-cleared.png artifacts/screen-commerce.png 2>artifacts/detector-diff-commerce.log || echo DIFF_FAIL)
+    if [ "$COMMERCE_DIFF" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-commerce.png:"; cat artifacts/detector-diff-commerce.log; COMMERCE_DIFF=SAME; fi
+    COMM_PAGE=$(python3 /tmp/story_page.py artifacts/screen-commerce.png 2>artifacts/detector-commerce-page.log || echo DETECTOR_FAIL)
+    if [ "$COMM_PAGE" = "DETECTOR_FAIL" ]; then echo "story detector FAILED on screen-commerce.png (see artifacts/detector-commerce-page.log):"; cat artifacts/detector-commerce-page.log; COMM_PAGE=OTHER; fi
+    echo "commerce gate attempt 1: scene-diff vs cleared home = $COMMERCE_DIFF, story-page = $COMM_PAGE (need BIG + OTHER)" | tee -a artifacts/launch.log
+    if [ "$COMMERCE_DIFF" != "BIG" ] || [ "$COMM_PAGE" != "OTHER" ]; then
+      echo "Commerce NOT confirmed — tapping the VIP button once more (570,105)" | tee -a artifacts/launch.log
+      adb -s "$DEV" shell input tap 570 105 2>&1 || true
+      sleep 12
+      adb -s "$DEV" exec-out screencap -p > artifacts/screen-commerce.png 2>/dev/null || true
+      COMMERCE_DIFF=$(python3 /tmp/scene_diff.py artifacts/screen-dialogue-cleared.png artifacts/screen-commerce.png 2>artifacts/detector-diff-commerce2.log || echo DIFF_FAIL)
+      if [ "$COMMERCE_DIFF" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-commerce.png (attempt 2):"; cat artifacts/detector-diff-commerce2.log; COMMERCE_DIFF=SAME; fi
+      COMM_PAGE=$(python3 /tmp/story_page.py artifacts/screen-commerce.png 2>artifacts/detector-commerce-page2.log || echo DETECTOR_FAIL)
+      if [ "$COMM_PAGE" = "DETECTOR_FAIL" ]; then echo "story detector FAILED on screen-commerce.png (attempt 2):"; cat artifacts/detector-commerce-page2.log; COMM_PAGE=OTHER; fi
+      echo "commerce gate attempt 2: scene-diff vs cleared home = $COMMERCE_DIFF, story-page = $COMM_PAGE" | tee -a artifacts/launch.log
     fi
-    echo "privilege_opened=$PRIVILEGE_OPENED" | tee -a artifacts/launch.log
-    if [ "$PRIVILEGE_OPENED" = "yes" ]; then
-      echo "scrolling the Privilege dialog rows (swipe up inside the dialog) for the caps rows below the fold" | tee -a artifacts/launch.log
-      adb -s "$DEV" shell input swipe 360 800 360 450 500 2>&1 || true
-      sleep 3
-      adb -s "$DEV" exec-out screencap -p > artifacts/screen-privilege-2.png 2>/dev/null || true
-      ls -la artifacts/screen-privilege-2.png 2>&1 || true
+    if [ "$COMMERCE_DIFF" = "BIG" ] && [ "$COMM_PAGE" = "OTHER" ]; then
+      COMMERCE_LOADED=yes
+    fi
+    echo "commerce_loaded=$COMMERCE_LOADED" | tee -a artifacts/launch.log
+    if [ "$COMMERCE_LOADED" = "yes" ]; then
+      echo "== ROUND 2b2: VIP TAB — tab 3 at (382,187) =="
+      echo "tab layout (commerceScene.lua initTab/drawViewG): tab i centre x = 92 + 145*(i-1), y = TOP_MOVE_Y + 120 + 67 (~187 if TOP_MOVE_Y=0); default-tab priority TreasurePavilion -> ExchangeShop -> VIP, so VIP is most likely the LAST tab (tab 3). Operator verifies from screen-commerce-vip.png." | tee -a artifacts/launch.log
+      adb -s "$DEV" shell input tap 382 187 2>&1 || true
+      echo "VIP-tab tap sent (382,187)" | tee -a artifacts/launch.log
+      sleep 8
+      adb -s "$DEV" exec-out screencap -p > artifacts/screen-commerce-vip.png 2>/dev/null || true
+      ls -la artifacts/screen-commerce-vip.png 2>&1 || true
+      # Honest heuristic only: Commerce loaded + the VIP-tab tap was sent.
+      # NOT set from any diff vs home (that was the run-2b false positive:
+      # vip_tab_reached=yes while the screen was still home + dialogue).
+      # The operator's pixel read of screen-commerce-vip.png is authoritative.
+      VIP_TAB_REACHED=yes
+      echo "vip_tab_reached=yes (heuristic: Commerce loaded + tab tap sent — operator verifies the VIP tab from screen-commerce-vip.png)" | tee -a artifacts/launch.log
+    else
+      echo "Commerce did NOT load after two VIP-button taps — stopping the VIP phase gracefully (no blind taps); relaunch phase still runs" | tee -a artifacts/launch.log
+    fi
+    # ROUND 2c: PRIVILEGE DIALOG — only on the VIP tab (COMMERCE_LOADED=yes).
+    # Coordinates derived from vipView.lua, NOT the run-2b literals: the
+    # run-2b taps (100,310)/(680,90) were fired while the game was still on
+    # HOME + dialogue, where (100,310) is the left icon column and (680,90)
+    # is Glorious Rush — so those exact points are never reused. The Lua
+    # targets: initTop (vipView.lua:1427-1447) puts the badge button btnVipLv
+    # at x=100 in a top bar centred at y=310+TOP_MOVE_Y, and the button is the
+    # whole createVipLv badge group (icon + level number + "Privilege" tip
+    # text below the icon); initPreview (:1507-1518) puts the gold "vip"
+    # button at (SCREEN_W-40, 90+TOP_MOVE_Y) = (680,90), its image ~100px
+    # wide at scale 0.8, so it spans roughly x 640-720. The sweep below taps
+    # points INSIDE each button's area but off its centre — badge-low
+    # (100,340, tip-text area), badge-high (100,280, upper icon area),
+    # gold-left (650,90), gold-right (705,90) — each followed by a screenshot
+    # + scene-diff vs the VIP-tab shot; the first BIG diff stops the sweep.
+    # This also brackets a small TOP_MOVE_Y offset (up to ~30px). NEVER tap
+    # any purchase/claim/buy button; capture only.
+    if [ "$COMMERCE_LOADED" = "yes" ]; then
+      echo "== ROUND 2c: PRIVILEGE DIALOG — badge/gold sweep on the VIP tab ==" | tee -a artifacts/launch.log
+      try_privilege_tap() {
+        local tapx="$1" tapy="$2" shot="$3" logname="$4"
+        adb -s "$DEV" shell input tap "$tapx" "$tapy" 2>&1 || true
+        sleep 5
+        adb -s "$DEV" exec-out screencap -p > "$shot" 2>/dev/null || true
+        ls -la "$shot" 2>&1 || true
+        local d
+        d=$(python3 /tmp/scene_diff.py artifacts/screen-commerce-vip.png "$shot" 2>"artifacts/$logname" || echo DIFF_FAIL)
+        if [ "$d" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on $shot (see artifacts/$logname):"; cat "artifacts/$logname"; d=SAME; fi
+        echo "privilege tap ($tapx,$tapy) -> $shot vs commerce-vip: $d (BIG = dialog likely opened)" | tee -a artifacts/launch.log
+        if [ "$d" = "BIG" ]; then
+          PRIVILEGE_OPENED=yes
+          PRIVILEGE_SHOT="$shot"
+          return 0
+        fi
+        return 1
+      }
+      try_privilege_tap 100 340 artifacts/screen-privilege.png detector-diff-priv.log || \
+      try_privilege_tap 100 280 artifacts/screen-privilege-b.png detector-diff-priv-b.log || \
+      try_privilege_tap 650 90 artifacts/screen-privilege-gold.png detector-diff-priv-gold.log || \
+      try_privilege_tap 705 90 artifacts/screen-privilege-gold2.png detector-diff-priv-gold2.log || \
+      echo "none of the four Privilege taps opened the dialog (all SAME vs commerce-vip)" | tee -a artifacts/launch.log
+      echo "privilege_opened=$PRIVILEGE_OPENED (shot: $PRIVILEGE_SHOT)" | tee -a artifacts/launch.log
+      if [ "$PRIVILEGE_OPENED" = "yes" ]; then
+        echo "scrolling the Privilege dialog rows (swipe up inside the dialog) for the caps rows below the fold" | tee -a artifacts/launch.log
+        adb -s "$DEV" shell input swipe 360 800 360 450 500 2>&1 || true
+        sleep 3
+        adb -s "$DEV" exec-out screencap -p > artifacts/screen-privilege-2.png 2>/dev/null || true
+        ls -la artifacts/screen-privilege-2.png 2>&1 || true
+      fi
+    else
+      echo "skipping the Privilege phase: Commerce never loaded" | tee -a artifacts/launch.log
     fi
     echo "== ROUND 2d: RELAUNCH PERSISTENCE — force-stop, relaunch, wait 60s =="
     adb -s "$DEV" shell am force-stop "$PKG" 2>&1 || true
@@ -922,7 +1011,16 @@ PYEOF
     if [ "$RL_DIFF" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-relaunch-60s.png:"; cat artifacts/detector-diff-relaunch.log; RL_DIFF=BIG; fi
     echo "relaunch-60s vs home scene-diff = $RL_DIFF (SAME = back on home directly)" | tee -a artifacts/launch-relaunch.log
     if [ "$RL_DIFF" = "SAME" ]; then
-      RELAUNCH_HOME=yes
+      # 60s shot already matches home — but relaunch_home is judged from
+      # screen-relaunch-home.png (verification correction: the 60s shot is
+      # normally the TITLE screen, not home), so copy it to the canonical
+      # relaunch-home file and verify that copy matches home too.
+      cp artifacts/screen-relaunch-60s.png artifacts/screen-relaunch-home.png 2>/dev/null || true
+      ls -la artifacts/screen-relaunch-home.png 2>&1 || true
+      RLH_DIFF=$(python3 /tmp/scene_diff.py artifacts/screen-home.png artifacts/screen-relaunch-home.png 2>artifacts/detector-diff-relaunch-home.log || echo DIFF_FAIL)
+      if [ "$RLH_DIFF" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-relaunch-home.png (copied from 60s):"; cat artifacts/detector-diff-relaunch-home.log; RLH_DIFF=BIG; fi
+      echo "relaunch-home (copied from 60s) vs home scene-diff = $RLH_DIFF" | tee -a artifacts/launch-relaunch.log
+      [ "$RLH_DIFF" = "SAME" ] && RELAUNCH_HOME=yes
     else
       echo "not home yet after relaunch — tap center once (tap-to-start screen?) and wait 30s" | tee -a artifacts/launch-relaunch.log
       adb -s "$DEV" shell input tap "$CX" "$CY" 2>&1 || true
@@ -952,7 +1050,7 @@ PYEOF
   else
     echo "home NOT reached after $STORY_TAPS story taps — no round-2 phase (letter/VIP/privilege/relaunch skipped)" | tee -a artifacts/launch.log
   fi
-  echo "round2: letter_dismissed=$LETTER_DISMISSED vip_tab_reached=$VIP_TAB_REACHED privilege_opened=$PRIVILEGE_OPENED relaunch_home=$RELAUNCH_HOME relaunch_vip16=$RELAUNCH_VIP16" | tee -a artifacts/launch.log
+  echo "round2: letter_dismissed=$LETTER_DISMISSED dialogue_cleared=$DIALOGUE_CLEARED commerce_loaded=$COMMERCE_LOADED vip_tab_reached=$VIP_TAB_REACHED privilege_opened=$PRIVILEGE_OPENED relaunch_home=$RELAUNCH_HOME relaunch_vip16=$RELAUNCH_VIP16" | tee -a artifacts/launch.log
 fi
 
 echo "== capture logcat =="
@@ -997,7 +1095,7 @@ echo "story_taps: ${STORY_TAPS:-0} story_ended: ${STORY_ENDED:-no} decree_advanc
 echo "profile_tapped: ${PROFILE_TAPPED:-no}"
 
 {
-  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no) login_reached=$LOGIN_REACHED reign_reached=$REIGN_REACHED story_taps=${STORY_TAPS:-0} story_ended=${STORY_ENDED:-no} decree_advanced=${DECREE_ADVANCED:-no} story2_taps=${STORY2_TAPS:-0} story2_ended=${STORY2_ENDED:-no} story2_big=${STORY2_BIG:-no} home_reached=${HOME_REACHED:-no} profile_tapped=${PROFILE_TAPPED:-no} detector_failed=${DETECTOR_FAILED:-no} letter_dismissed=${LETTER_DISMISSED:-no} vip_tab_reached=${VIP_TAB_REACHED:-no} privilege_opened=${PRIVILEGE_OPENED:-no} relaunch_home=${RELAUNCH_HOME:-no} relaunch_vip16=unknown vip_visible=unknown consent_dismissed=${CONSENT_DISMISSED:-not-present}"
+  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no) login_reached=$LOGIN_REACHED reign_reached=$REIGN_REACHED story_taps=${STORY_TAPS:-0} story_ended=${STORY_ENDED:-no} decree_advanced=${DECREE_ADVANCED:-no} story2_taps=${STORY2_TAPS:-0} story2_ended=${STORY2_ENDED:-no} story2_big=${STORY2_BIG:-no} home_reached=${HOME_REACHED:-no} profile_tapped=${PROFILE_TAPPED:-no} detector_failed=${DETECTOR_FAILED:-no} letter_dismissed=${LETTER_DISMISSED:-no} dialogue_cleared=${DIALOGUE_CLEARED:-no} commerce_loaded=${COMMERCE_LOADED:-no} vip_tab_reached=${VIP_TAB_REACHED:-no} privilege_opened=${PRIVILEGE_OPENED:-no} relaunch_home=${RELAUNCH_HOME:-no} relaunch_vip16=unknown vip_visible=unknown consent_dismissed=${CONSENT_DISMISSED:-not-present}"
   echo "login_reached is a heuristic (screen-home.png differs from screen-60s.png); confirm from the screenshots"
   echo "reign_reached is a heuristic (screen-reign+30s.png differs from screen-tap+150s.png); confirm from the screenshots"
   echo "home_reached is a heuristic (big scene change after the RESUMED story walk, or screen-home.png differs substantially from the last story shot); decree_advanced alone NEVER implies home; confirm from screen-home.png"
@@ -1007,7 +1105,7 @@ echo "profile_tapped: ${PROFILE_TAPPED:-no}"
   echo "story_taps counts '»' advance taps in walk 1 (up to 40) (+1 if a Skip button was tapped instead on the final iteration); story2_taps counts '»' taps in the resumed walk past the decree (screen-story2-N.png, up to 20) — walk 2 runs whenever walk 1 ends still in dialogue, not only when decree_advanced=yes"
   echo "detector_failed=yes means the stdlib pixel detector errored on the runner (see artifacts/detector-*.log) — the walk stopped at the first failed detector call instead of silently defaulting to STORY"
   echo "vip_visible=unknown: the script cannot read pixels — the operator determines VIP from screen-home.png and screen-profile.png (look for a VIP level/badge, e.g. 'VIP 16', on the home/profile screen)"
-  echo "round2: letter_dismissed=yes means screen-letter-closed.png matches screen-home.png (letter gone); vip_tab_reached is a heuristic (Commerce entered + best-guess tab-3 tap) — operator verifies from screen-commerce-vip.png; privilege_opened=yes means the Privilege dialog visibly changed the screen after the VIP-badge (or gold vip-button) tap — operator reads the caps rows (MaxVigor/MaxVitality, expect 19) from screen-privilege*.png; relaunch_home=yes means a relaunch screenshot matches screen-home.png; relaunch_vip16=unknown — operator reads the VIP 16 badge from screen-relaunch-*.png"
+  echo "round2: letter_dismissed=yes means screen-letter-closed.png (or -2) differs from screen-letter-open.png (parchment gone); vip_tab_reached is a heuristic (Commerce loaded + tab-3 tap sent) — operator verifies from screen-commerce-vip.png; dialogue_cleared=yes means the story_page detector reads OTHER on screen-dialogue-cleared.png (no cutscene dialogue open); commerce_loaded=yes means screen-commerce.png differs substantially from screen-dialogue-cleared.png AND is not a story page; privilege_opened=yes means the Privilege dialog visibly changed the screen after one of the badge/gold sweep taps (screen-privilege*.png) — operator reads the caps rows (MaxVigor/MaxVitality, expect 19) from screen-privilege*.png; relaunch_home=yes means screen-relaunch-home.png matches screen-home.png (the 60s shot is the TITLE screen, not home); relaunch_vip16=unknown — operator reads the VIP 16 badge from screen-relaunch-*.png"
   echo "device: $(adb -s "$DEV" shell getprop ro.product.model 2>/dev/null) Android $(adb -s "$DEV" shell getprop ro.build.version.release 2>/dev/null) abi $(adb -s "$DEV" shell getprop ro.product.cpu.abi 2>/dev/null)"
   echo "apk: $APK (MOD VIP16+arm64 libs, sha256 $APK_SHA256) + $PAD1 (re-signed PAD1 split, sha256 $PAD1_SHA256) via install-multiple"
 } | tee artifacts/RESULT.md
