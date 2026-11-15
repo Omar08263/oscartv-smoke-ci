@@ -35,6 +35,14 @@
 # "Skip" button appears (tap it ONCE instead). FIX (this run): PREV_SHOT is
 # updated on the breaking iteration too, so the later home comparison is
 # against the LAST story shot, not the previous one.
+# RESUME RUN (this run): story continues PAST the decree (run 43710283715: one
+# center tap advanced the decree to ANOTHER story page, Piyale: "All hail the
+# new Sultan!", with the "»" button back). So after the decree center-tap,
+# RESUME the "»" story loop (up to 20 more taps, screen-story2-N.png) and stop
+# early ONLY on a big scene change to a NON-story screen (scene-diff BIG).
+# home_reached=yes is set ONLY on that big scene change after the resumed walk
+# (never from decree_advanced alone — that was the run 43710283715 false
+# positive); the operator verifies home from screen-home.png pixels.
 # DECREE PAGE (this run): the story walk ends on the final decree-scroll page
 # ("I've decided to pass the throne to Eddy Good..."), which has NO "»"
 # button. Screenshot it as screen-decree.png; if it is stable (no
@@ -47,11 +55,16 @@
 # 60 s wait, stop and report that (do not keep tapping blindly).
 # OVERLAY DISMISS (this run): right after launch, once the 15 s screenshot
 # shows the game loading, tap "GOT IT" on the Redroid "Viewing full screen"
-# system overlay (~573,376 on 720x1280; prefer uiautomator bounds when found),
-# screenshot screen-overlay-dismiss.png and confirm the banner is GONE; tap
-# once more if it is still there. The overlay covers the top ~500 px of every
-# screenshot and swallows taps there — dismissing it early is what makes the
-# top bar (avatar / VIP badge) visible and tappable at all.
+# system overlay — parse the uiautomator dump WITH PYTHON/XML and take the
+# bounds of the node whose text="GOT IT" (real bounds [464,353][640,449],
+# center (552,401), verified in run 43710283715's uiautomator-overlay.xml).
+# NEVER grep -o the first bounds on the one-line XML (that returned the root
+# FrameLayout [0,0][720,1280] and both taps went to (360,640) in the last run).
+# Fallback if parsing fails: tap the literal (552,401). Screenshot
+# screen-overlay-dismiss.png and confirm the banner is GONE; tap once more
+# if it is still there. The overlay covers the top ~500 px of every screenshot
+# and swallows taps there — dismissing it early is what makes the top bar
+# (avatar / VIP badge) visible and tappable at all.
 # NEVER tap anything labeled price/purchase/recharge/top-up/VIP purchase.
 # NO sign-in, NO account binding, NO payment info, NO age verification.
 # v3 sha256 486e97c7620b821bcf9bbfd1607d40157a14ce4c1941546c2277492a6a9dc7f5
@@ -70,6 +83,28 @@ PAD1_SIZE=1421381979
 PKG="com.dc.hwsj"
 ACT="com.dc.hwsj/com.dc.angry.gen.StartupActivity"
 DEV="localhost:5555"
+# node_center <dump.xml> <text-substring> - prints "X Y" (center of the node
+# whose text/content-desc contains the substring), using Python XML parsing.
+# The uiautomator dump is a SINGLE line of XML, so grepping bounds returns
+# the FIRST bounds in the file (root FrameLayout) - never grep for bounds.
+node_center() {
+  python3 - "$1" "$2" <<'PYEOF'
+import sys, xml.etree.ElementTree as ET, re
+try:
+    tree = ET.parse(sys.argv[1])
+except Exception as e:
+    print("PARSE_FAIL %s" % e, file=sys.stderr); sys.exit(1)
+want = sys.argv[2].lower()
+for el in tree.iter("node"):
+    t = ((el.get("text") or "") + " " + (el.get("content-desc") or "")).lower()
+    if want in t:
+        m = re.findall(r"\d+", el.get("bounds") or "")
+        if len(m) == 4:
+            print((int(m[0]) + int(m[2])) // 2, (int(m[1]) + int(m[3])) // 2)
+            sys.exit(0)
+sys.exit(2)
+PYEOF
+}
 INSTALL_OK=0
 LOG_OK=0
 
@@ -201,14 +236,14 @@ if [ "$INSTALL_OK" = "1" ]; then
   echo "== OVERLAY DISMISS: Redroid 'Viewing full screen / GOT IT' banner covers the top ~500px and swallows taps there — dismiss it NOW =="
   adb -s "$DEV" shell uiautomator dump /sdcard/window_dump_overlay.xml 2>&1 | tee -a artifacts/launch.log || true
   adb -s "$DEV" pull /sdcard/window_dump_overlay.xml artifacts/uiautomator-overlay.xml 2>&1 || true
-  GOTIT_BOUNDS=$(grep -i "GOT IT" artifacts/uiautomator-overlay.xml 2>/dev/null | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed 's/bounds="//; s/"//' || true)
-  if [ -n "$GOTIT_BOUNDS" ]; then
-    GOTIT_X=$(echo "$GOTIT_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[0])+int(a[2]))//2)")
-    GOTIT_Y=$(echo "$GOTIT_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[1])+int(a[3]))//2)")
-    echo "uiautomator 'GOT IT' bounds: $GOTIT_BOUNDS -> tap $GOTIT_X,$GOTIT_Y" | tee -a artifacts/launch.log
+  GOTIT_CENTER=$(node_center artifacts/uiautomator-overlay.xml "GOT IT" 2>/dev/null || true)
+  if [ -n "$GOTIT_CENTER" ]; then
+    GOTIT_X=$(echo "$GOTIT_CENTER" | cut -d' ' -f1)
+    GOTIT_Y=$(echo "$GOTIT_CENTER" | cut -d' ' -f2)
+    echo "uiautomator 'GOT IT' node center (Python/XML parse): tap $GOTIT_X,$GOTIT_Y" | tee -a artifacts/launch.log
   else
-    GOTIT_X=573; GOTIT_Y=376
-    echo "no 'GOT IT' node in dump — tapping fallback coords $GOTIT_X,$GOTIT_Y" | tee -a artifacts/launch.log
+    GOTIT_X=552; GOTIT_Y=401
+    echo "no 'GOT IT' node parsed from dump — tapping literal fallback coords $GOTIT_X,$GOTIT_Y (verified bounds [464,353][640,449])" | tee -a artifacts/launch.log
   fi
   adb -s "$DEV" shell input tap "$GOTIT_X" "$GOTIT_Y" 2>&1 || true
   echo "GOT IT tap 1 sent" | tee -a artifacts/launch.log
@@ -281,11 +316,11 @@ if [ "$INSTALL_OK" = "1" ]; then
   adb -s "$DEV" shell uiautomator dump /sdcard/window_dump.xml 2>&1 | tee -a artifacts/launch.log || true
   adb -s "$DEV" pull /sdcard/window_dump.xml artifacts/uiautomator-reign-pre.xml 2>&1 || true
   if [ -s artifacts/uiautomator-reign-pre.xml ]; then
-    REIGN_BOUNDS=$(grep -i "Start your reign" artifacts/uiautomator-reign-pre.xml | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed 's/bounds="//; s/"//' || true)
-    echo "uiautomator 'Start your reign' bounds: ${REIGN_BOUNDS:-<not found>}" | tee -a artifacts/launch.log
-    if [ -n "$REIGN_BOUNDS" ]; then
-      REIGN_X=$(echo "$REIGN_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[0])+int(a[2]))//2)")
-      REIGN_Y=$(echo "$REIGN_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[1])+int(a[3]))//2)")
+    REIGN_CENTER=$(node_center artifacts/uiautomator-reign-pre.xml "Start your reign" 2>/dev/null || true)
+    echo "uiautomator 'Start your reign' node center (Python/XML parse): ${REIGN_CENTER:-<not found>}" | tee -a artifacts/launch.log
+    if [ -n "$REIGN_CENTER" ]; then
+      REIGN_X=$(echo "$REIGN_CENTER" | cut -d' ' -f1)
+      REIGN_Y=$(echo "$REIGN_CENTER" | cut -d' ' -f2)
       echo "reign tap coords from uiautomator: $REIGN_X,$REIGN_Y" | tee -a artifacts/launch.log
     fi
   else
@@ -341,10 +376,10 @@ PYEOF
     # instead of the "»" button and stop the loop.
     adb -s "$DEV" shell uiautomator dump /sdcard/window_dump_skip.xml 2>&1 | tee -a artifacts/launch.log || true
     adb -s "$DEV" pull /sdcard/window_dump_skip.xml artifacts/uiautomator-story-$N.xml 2>&1 || true
-    SKIP_BOUNDS=$(grep -i "skip" artifacts/uiautomator-story-$N.xml 2>/dev/null | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed 's/bounds="//; s/"//' || true)
-    if [ -n "$SKIP_BOUNDS" ]; then
-      SKIP_X=$(echo "$SKIP_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[0])+int(a[2]))//2)")
-      SKIP_Y=$(echo "$SKIP_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[1])+int(a[3]))//2)")
+    SKIP_CENTER=$(node_center artifacts/uiautomator-story-$N.xml "skip" 2>/dev/null || true)
+    if [ -n "$SKIP_CENTER" ]; then
+      SKIP_X=$(echo "$SKIP_CENTER" | cut -d' ' -f1)
+      SKIP_Y=$(echo "$SKIP_CENTER" | cut -d' ' -f2)
       echo "story tap $N/20: 'Skip' button found at $SKIP_X,$SKIP_Y — tapping it ONCE instead of '»'" | tee -a artifacts/launch.log
       adb -s "$DEV" shell input tap "$SKIP_X" "$SKIP_Y" 2>&1 || true
       STORY_TAPS=$((STORY_TAPS + 1))
@@ -419,6 +454,50 @@ PYEOF
     PREV_SHOT="artifacts/screen-decree.png"
   fi
   echo "decree_advanced=$DECREE_ADVANCED" | tee -a artifacts/launch.log
+  echo "== STORY WALK 2 (RESUME PAST DECREE): the decree advanced to ANOTHER story page in run 43710283715 (Piyale), so resume the '»' loop up to 20 more taps =="
+  STORY2_TAPS=0
+  STORY2_ENDED=no
+  STORY2_BIG=no
+  if [ "$DECREE_ADVANCED" = "yes" ]; then
+    for N in $(seq 1 20); do
+      adb -s "$DEV" shell uiautomator dump /sdcard/window_dump_skip2.xml 2>&1 | tee -a artifacts/launch.log || true
+      adb -s "$DEV" pull /sdcard/window_dump_skip2.xml artifacts/uiautomator-story2-$N.xml 2>&1 || true
+      SKIP2_CENTER=$(node_center artifacts/uiautomator-story2-$N.xml "skip" 2>/dev/null || true)
+      if [ -n "$SKIP2_CENTER" ]; then
+        SKIP2_X=$(echo "$SKIP2_CENTER" | cut -d' ' -f1)
+        SKIP2_Y=$(echo "$SKIP2_CENTER" | cut -d' ' -f2)
+        echo "story2 tap $N/20: 'Skip' button found at $SKIP2_X,$SKIP2_Y — tapping it ONCE instead of '»'" | tee -a artifacts/launch.log
+        adb -s "$DEV" shell input tap "$SKIP2_X" "$SKIP2_Y" 2>&1 || true
+        STORY2_TAPS=$((STORY2_TAPS + 1))
+        sleep 15
+        adb -s "$DEV" exec-out screencap -p > artifacts/screen-story2-$N.png 2>/dev/null || true
+        STORY2_ENDED=yes
+        STORY2_BIG=yes
+        PREV_SHOT="artifacts/screen-story2-$N.png"
+        break
+      fi
+      echo "story2 tap $N/20 at $STORY_X,$STORY_Y" | tee -a artifacts/launch.log
+      adb -s "$DEV" shell input tap "$STORY_X" "$STORY_Y" 2>&1 || true
+      STORY2_TAPS=$((STORY2_TAPS + 1))
+      sleep 15
+      adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || { echo "app process NOT running after story2 tap $N — stopping the loop"; break; }
+      adb -s "$DEV" exec-out screencap -p > artifacts/screen-story2-$N.png 2>/dev/null || true
+      ls -la artifacts/screen-story2-$N.png 2>&1 || true
+      DIFF2=$(python3 /tmp/scene_diff.py "$PREV_SHOT" "artifacts/screen-story2-$N.png" 2>/dev/null || echo SAME)
+      echo "story2 tap $N: scene-diff vs previous shot = $DIFF2" | tee -a artifacts/launch.log
+      if [ "$DIFF2" = "BIG" ]; then
+        echo "screen changed substantially after story2 tap $N — story scene left (new scene/home? operator verifies from the pixels)" | tee -a artifacts/launch.log
+        STORY2_ENDED=yes
+        STORY2_BIG=yes
+        PREV_SHOT="artifacts/screen-story2-$N.png"
+        break
+      fi
+      PREV_SHOT="artifacts/screen-story2-$N.png"
+    done
+  else
+    echo "decree page never advanced — no story walk 2 (do not keep tapping blindly)" | tee -a artifacts/launch.log
+  fi
+  echo "story walk 2 done: taps=$STORY2_TAPS story2_ended=$STORY2_ENDED story2_big=$STORY2_BIG" | tee -a artifacts/launch.log
   echo "== final screenshots (screen-home.png) =="
   sleep 5
   adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at final screenshot"
@@ -427,14 +506,16 @@ PYEOF
   ls -la artifacts/screen-home.png 2>&1 || true
   HOME_DIFF=$(python3 /tmp/scene_diff.py "$PREV_SHOT" artifacts/screen-home.png 2>/dev/null || echo SAME)
   echo "screen-home.png scene-diff vs last decree/story shot ($PREV_SHOT) = $HOME_DIFF" | tee -a artifacts/launch.log
-  # FIX: home_reached must NOT follow from STORY_ENDED alone (that was the
-  # run 43709009089 false positive — a new story page is not home). It
-  # follows only from the decree page actually advancing, or the final
-  # screenshot differing substantially from the last decree/story shot.
-  if [ "$DECREE_ADVANCED" = "yes" ] || [ "$HOME_DIFF" = "BIG" ]; then
+  # home_reached must NOT follow from STORY_ENDED or DECREE_ADVANCED alone
+  # (runs 43709009089 + 43710283715 false positives — a new story page is not
+  # home; "left the decree page" is not "reached home"). It follows ONLY from
+  # a big scene change AFTER the resumed story walk (STORY2_BIG) or a big
+  # change of the final screenshot vs the last story shot — i.e. the screen
+  # visibly left the story. The operator verifies from screen-home.png pixels.
+  if [ "${STORY2_BIG:-no}" = "yes" ] || [ "$HOME_DIFF" = "BIG" ]; then
     HOME_REACHED=yes
   fi
-  echo "home_reached (heuristic: decree page advanced OR big scene change vs last decree/story shot; verify visually from screen-home.png): $HOME_REACHED" | tee -a artifacts/launch.log
+  echo "home_reached (heuristic: big scene change after resumed story walk, or final shot differs substantially vs last story shot; verify visually from screen-home.png): $HOME_REACHED" | tee -a artifacts/launch.log
   # PROFILE CHECK — only if home was reached. Prefer a uiautomator
   # profile/avatar node; else tap the top-left avatar area ONCE
   # (~70,90 on 720x1280). Never tap price/purchase/recharge/top-up/VIP nodes.
@@ -444,14 +525,14 @@ PYEOF
     adb -s "$DEV" pull /sdcard/window_dump_home.xml artifacts/uiautomator-home.xml 2>&1 || true
     PROF_BOUNDS=""
     if [ -s artifacts/uiautomator-home.xml ]; then
-      PROF_BOUNDS=$(grep -i -E "profile|avatar" artifacts/uiautomator-home.xml | grep -v -i -E "price|purchase|recharge|top.up|vip|pay|buy|pack|gem|diamond|coin" | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed 's/bounds="//; s/"//' || true)
-      echo "uiautomator profile/avatar bounds: ${PROF_BOUNDS:-<none found>}" | tee -a artifacts/launch.log
+      PROF_CENTER=$(node_center artifacts/uiautomator-home.xml "profile" 2>/dev/null || node_center artifacts/uiautomator-home.xml "avatar" 2>/dev/null || true)
+      echo "uiautomator profile/avatar node center (Python/XML parse): ${PROF_CENTER:-<none found>}" | tee -a artifacts/launch.log
     else
       echo "uiautomator dump at home empty/missing — using top-left avatar estimate" | tee -a artifacts/launch.log
     fi
-    if [ -n "$PROF_BOUNDS" ]; then
-      PROF_X=$(echo "$PROF_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[0])+int(a[2]))//2)")
-      PROF_Y=$(echo "$PROF_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[1])+int(a[3]))//2)")
+    if [ -n "$PROF_CENTER" ]; then
+      PROF_X=$(echo "$PROF_CENTER" | cut -d' ' -f1)
+      PROF_Y=$(echo "$PROF_CENTER" | cut -d' ' -f2)
     else
       PROF_X=$((W * 70 / 720)); PROF_Y=$((H * 90 / 1280))
       echo "no profile node — tapping top-left avatar area ONCE at $PROF_X,$PROF_Y" | tee -a artifacts/launch.log
@@ -507,17 +588,17 @@ if [ -s artifacts/screen-reign+30s.png ] && [ -s artifacts/screen-tap+150s.png ]
 fi
 echo "login_reached (heuristic: final screenshot differs from pre-tap shot; verify visually): $LOGIN_REACHED"
 echo "reign_reached (heuristic: screen-reign+30s.png differs from screen-tap+150s.png, i.e. left character creation): $REIGN_REACHED"
-echo "story_taps: ${STORY_TAPS:-0} story_ended: ${STORY_ENDED:-no} decree_advanced: ${DECREE_ADVANCED:-no} home_reached: ${HOME_REACHED:-no}"
+echo "story_taps: ${STORY_TAPS:-0} story_ended: ${STORY_ENDED:-no} decree_advanced: ${DECREE_ADVANCED:-no} story2_taps: ${STORY2_TAPS:-0} story2_ended: ${STORY2_ENDED:-no} story2_big: ${STORY2_BIG:-no} home_reached: ${HOME_REACHED:-no}"
 echo "profile_tapped: ${PROFILE_TAPPED:-no}"
 
 {
-  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no) login_reached=$LOGIN_REACHED reign_reached=$REIGN_REACHED story_taps=${STORY_TAPS:-0} story_ended=${STORY_ENDED:-no} decree_advanced=${DECREE_ADVANCED:-no} home_reached=${HOME_REACHED:-no} profile_tapped=${PROFILE_TAPPED:-no} vip_visible=unknown"
+  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no) login_reached=$LOGIN_REACHED reign_reached=$REIGN_REACHED story_taps=${STORY_TAPS:-0} story_ended=${STORY_ENDED:-no} decree_advanced=${DECREE_ADVANCED:-no} story2_taps=${STORY2_TAPS:-0} story2_ended=${STORY2_ENDED:-no} story2_big=${STORY2_BIG:-no} home_reached=${HOME_REACHED:-no} profile_tapped=${PROFILE_TAPPED:-no} vip_visible=unknown"
   echo "login_reached is a heuristic (screen-home.png differs from screen-60s.png); confirm from the screenshots"
   echo "reign_reached is a heuristic (screen-reign+30s.png differs from screen-tap+150s.png); confirm from the screenshots"
-  echo "home_reached is a heuristic (decree page advanced after the center tap, or screen-home.png differs substantially from the last decree/story shot); confirm from screen-home.png"
+  echo "home_reached is a heuristic (big scene change after the RESUMED story walk, or screen-home.png differs substantially from the last story shot); decree_advanced alone NEVER implies home; confirm from screen-home.png"
   echo "decree_advanced=yes means the decree-scroll page left the screen after the single center tap (screen-decree+30s.png) or during the extra 60s wait (screen-decree+90s.png); confirm from those screenshots"
   echo "overlay dismiss: screen-overlay-dismiss.png shows the state after the GOT IT tap (banner should be GONE); screen-overlay-dismiss-2.png exists only if a second tap was needed"
-  echo "story_taps counts '»' advance taps (+1 if a Skip button was tapped instead on the final iteration)"
+  echo "story_taps counts '»' advance taps in walk 1 (+1 if a Skip button was tapped instead on the final iteration); story2_taps counts '»' taps in the resumed walk past the decree (screen-story2-N.png)"
   echo "vip_visible=unknown: the script cannot read pixels — the operator determines VIP from screen-home.png and screen-profile.png (look for a VIP level/badge, e.g. 'VIP 16', on the home/profile screen)"
   echo "device: $(adb -s "$DEV" shell getprop ro.product.model 2>/dev/null) Android $(adb -s "$DEV" shell getprop ro.build.version.release 2>/dev/null) abi $(adb -s "$DEV" shell getprop ro.product.cpu.abi 2>/dev/null)"
   echo "apk: $APK (MOD VIP16+arm64 libs, sha256 $APK_SHA256) + $PAD1 (re-signed PAD1 split, sha256 $PAD1_SHA256) via install-multiple"
