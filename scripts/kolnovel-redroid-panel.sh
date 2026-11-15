@@ -161,33 +161,56 @@ if [ "$INSTALL_OK" = "1" ]; then
   ls -la artifacts/screen-60s.png 2>&1 || true
 fi
 
-echo "== panel navigation: skip onboarding -> Settings -> Account =="
+echo "== panel navigation: consent first, then skip onboarding -> Settings -> Account =="
+# ORDER MATTERS (learned from run 43676859007): the UMP consent dialog is up
+# at 60s and blocks the onboarding skip — dismiss it FIRST, then skip.
+# Every tap reads a FRESH dump (never a stale one), and each step verifies the
+# screen actually changed before proceeding.
 dump_ui ui1.xml
-tap_text ui1.xml "تخطي" || { echo "skip text not found, fallback tap 635 125"; adb -s "$DEV" shell input tap 635 125; }
-sleep 8
-shoot screen-after-skip.png
-dump_ui ui2.xml
-if grep -qi "Consent" artifacts/ui2.xml; then
+if grep -qi "Consent" artifacts/ui1.xml; then
   echo "UMP consent dialog detected, tapping Consent"
-  tap_text ui2.xml "Consent" || adb -s "$DEV" shell input tap 360 955
+  tap_text ui1.xml "Consent" || adb -s "$DEV" shell input tap 360 955
   sleep 5
   shoot screen-after-consent.png
-  dump_ui ui2b.xml
 fi
-tap_text ui2.xml "الإعدادات" || { echo "settings tab text not found, fallback tap 72 1180"; adb -s "$DEV" shell input tap 72 1180; }
+dump_ui ui2.xml
+tap_text ui2.xml "تخطي" || { echo "skip text not found, fallback tap 635 125"; adb -s "$DEV" shell input tap 635 125; }
 sleep 8
-shoot screen-settings.png
+shoot screen-after-skip.png
 dump_ui ui3.xml
-tap_text ui3.xml "حساب القراءة" "مستخدم" "تسجيل الدخول" || echo "NO account-row match in settings UI"
-sleep 8
-shoot screen-account.png
-dump_ui ui4.xml
-if grep -q "حساب القراءة" artifacts/ui4.xml; then
-  echo "reading tab visible, tapping it"
-  tap_text ui4.xml "حساب القراءة" || true
-  sleep 5
-  shoot screen-account-reading.png
+if grep -q "تخطي" artifacts/ui3.xml; then
+  echo "onboarding still present, retrying skip"
+  tap_text ui3.xml "تخطي" || adb -s "$DEV" shell input tap 635 125
+  sleep 8
+  shoot screen-after-skip2.png
+  dump_ui ui3b.xml
+  cp artifacts/ui3b.xml artifacts/ui3.xml
+fi
+# Home screen should now be showing; go to the Settings tab.
+if grep -q "الإعدادات" artifacts/ui3.xml; then
+  tap_text ui3.xml "الإعدادات" || { echo "settings tab tap failed, fallback 72 1180"; adb -s "$DEV" shell input tap 72 1180; }
+  sleep 8
+  shoot screen-settings.png
+  dump_ui ui4.xml
+else
+  echo "NOT ON HOME SCREEN after skip (ui3 has no tab bar) — aborting nav"
+  cp artifacts/ui3.xml artifacts/ui4.xml
+fi
+# Account row only if we are actually on Settings (accounts section present).
+if grep -q "الحسابات" artifacts/ui4.xml; then
+  tap_text ui4.xml "حساب القراءة" "مستخدم" "تسجيل الدخول" || echo "NO account-row match in settings UI"
+  sleep 8
+  shoot screen-account.png
   dump_ui ui5.xml
+  if grep -q "حساب القراءة" artifacts/ui5.xml; then
+    echo "reading tab visible, tapping it"
+    tap_text ui5.xml "حساب القراءة" || true
+    sleep 5
+    shoot screen-account-reading.png
+    dump_ui ui6.xml
+  fi
+else
+  echo "NOT ON SETTINGS (ui4 has no accounts section) — aborting nav"
 fi
 adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running after navigation"
 
