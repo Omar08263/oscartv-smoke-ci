@@ -1,0 +1,30 @@
+name: kolnovel-redroid-mitm
+# Kolnovel MITM test on Redroid (arm64) — vector (c) of the locked-chapter
+# live verdict (round 3, 2026-11-15).
+# mitmproxy intercepts the app's HTTPS traffic; the addon flips /reader
+# access has_access=true -> false (server returns open for every chapter
+# tested, so there is no locked response to flip open — this flips the
+# other way to prove the client obeys the server's flag at runtime).
+# Triggered by pushing this file or the script/addon (no Actions:write
+# needed); also manual dispatch.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-mitm.yml'
+      - 'scripts/kolnovel-redroid-mitm.sh'
+      - 'scripts/kolnovel-mitm-addon.py'
+  workflow_dispatch:
+jobs:
+  redroid-mitm:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid MITM test (proxy + CA + navigate to chapter)
+        run: bash scripts/kolnovel-redroid-mitm.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-mitm-artifacts
+          path: artifacts/
