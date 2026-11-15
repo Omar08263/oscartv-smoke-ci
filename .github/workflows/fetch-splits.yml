@@ -1,0 +1,21 @@
+name: fetch-splits
+# Fetch the REAL Game of Sultans 7.804 split APKs from the APKPure XAPK.
+# Why: the mod's single APK installs (Redroid 43699371020) but crashes at
+# startup — libclthkasc.so (Dianchu KSecure) lives in the real ABI split and
+# CoronaCards libs cannot supply it. Extract the split, verify md5s, upload.
+# Run manually: Actions -> fetch-splits -> Run workflow.
+on:
+  workflow_dispatch:
+jobs:
+  fetch:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch splits from APKPure XAPK
+        run: bash scripts/fetch-splits.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: haremlik-real-splits
+          path: artifacts/
