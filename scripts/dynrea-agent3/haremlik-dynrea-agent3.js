@@ -205,6 +205,7 @@ function hookIntercept() {
         var intercept = KSInterceptor.intercept.overload('okhttp3.Interceptor$Chain');
         intercept.implementation = function (chain) {
             var url = '?', encType = '-', reqBodyInfo = 'no-body';
+            var tid = Process.getCurrentThreadId();
             try {
                 var req = chain.request();
                 url = req.url().toString();
@@ -215,13 +216,35 @@ function hookIntercept() {
                     var Buffer = Java.use('okio.Buffer');
                     var buf = Buffer.$new();
                     body.writeTo(buf);
-                    reqBodyInfo = 'len=' + buf.readByteArray().length;
+                    var bytes = buf.readByteArray();
+                    reqBodyInfo = 'len=' + bytes.length;
+                    // The body bytes as handed to OkHttp ARE the bytes sent.
+                    // On this client no request carries Gw-Encrypt-Type: chacha20,
+                    // so flip() never engages and this body is the PLAINTEXT
+                    // outer JSON (netAdapter.encrypt is the identity fn).
+                    var dec = decodeBytes(bytes, MAX_TARGET_CHARS);
+                    if (dec.printable && dec.text) {
+                        emitAction(parseBody(dec.text), 'REQ', tid);
+                    } else {
+                        log('http', 'REQ-BODY non-utf8 url=' + url + ' len=' + bytes.length);
+                    }
                 }
             } catch (e) { reqBodyInfo = 'read-error: ' + e; }
             log('http', 'REQ url=' + url + ' Gw-Encrypt-Type=' + encType + ' body ' + reqBodyInfo);
             var resp = intercept.call(this, chain);
             try {
                 log('http', 'RESP url=' + url + ' code=' + resp.code() + ' Gw-Encrypt-Type=' + (resp.header('Gw-Encrypt-Type') || '-'));
+                // peekBody() copies without consuming — the game still gets
+                // its full body. Only used when the response is NOT
+                // ChaCha20-encrypted (encrypted responses come via flip IN).
+                if (!resp.header('Gw-Encrypt-Type')) {
+                    try {
+                        var peek = resp.peekBody(20000);
+                        var rbytes = peek.bytes();
+                        var rdec = decodeBytes(rbytes, MAX_TARGET_CHARS);
+                        if (rdec.printable && rdec.text) emitAction(parseBody(rdec.text), 'RESP', tid);
+                    } catch (e2) { log('http', 'RESP peek failed url=' + url + ' ' + e2); }
+                }
             } catch (e) { log('http', 'RESP url=' + url + ' (post-log error: ' + e + ')'); }
             return resp;
         };
@@ -289,13 +312,20 @@ function setupLua() {
     try {
         var lua = Process.findModuleByName('liblua.so');
         if (lua === null) { log('caps', 'liblua.so not loaded yet — will retry'); return false; }
+        // Keep the raw NativePointers: Interceptor.attach needs a pointer,
+        // NOT the NativeFunction wrapper (passing the wrapper throws
+        // "TypeError: not a function" — run 43757858943, 24 attempts).
+        var pcallPtr = Module.getExportByName('liblua.so', 'lua_pcall');
+        var loadstringPtr = Module.getExportByName('liblua.so', 'luaL_loadstring');
+        var gettopPtr = Module.getExportByName('liblua.so', 'lua_gettop');
+        var settopPtr = Module.getExportByName('liblua.so', 'lua_settop');
         luaFns = {
-            pcall: new NativeFunction(Module.getExportByName('liblua.so', 'lua_pcall'), 'int', ['pointer', 'int', 'int', 'int']),
-            loadstring: new NativeFunction(Module.getExportByName('liblua.so', 'luaL_loadstring'), 'int', ['pointer', 'pointer']),
-            gettop: new NativeFunction(Module.getExportByName('liblua.so', 'lua_gettop'), 'int', ['pointer']),
-            settop: new NativeFunction(Module.getExportByName('liblua.so', 'lua_settop'), 'void', ['pointer', 'int'])
+            pcall: new NativeFunction(pcallPtr, 'int', ['pointer', 'int', 'int', 'int']),
+            loadstring: new NativeFunction(loadstringPtr, 'int', ['pointer', 'pointer']),
+            gettop: new NativeFunction(gettopPtr, 'int', ['pointer']),
+            settop: new NativeFunction(settopPtr, 'void', ['pointer', 'int'])
         };
-        Interceptor.attach(luaFns.pcall, {
+        Interceptor.attach(pcallPtr, {
             onEnter: function (args) {
                 if (inProbe) return;
                 var now = Date.now();
@@ -320,6 +350,7 @@ function setupLua() {
         });
         hooksAttached.lua = true;
         log('init', 'hook attached: liblua lua_pcall -> caps probe every ' + (PROBE_EVERY_MS / 1000) + 's');
+        log('caps', 'LUA HOOKS ATTACHED');
         return true;
     } catch (e) {
         log('init', 'hook FAILED (will retry): lua caps err=' + e);
@@ -335,7 +366,11 @@ function tryHookAll() {
     if (!hooksAttached.intercept) hookIntercept();
     if (!hooksAttached.init || !hooksAttached.enable) hookLifecycle();
     if (!hooksAttached.lua) setupLua();
-    var done = hooksAttached.flip && hooksAttached.flip2 && hooksAttached.intercept && hooksAttached.lua;
+    // Primary sentinel gates on the TRAFFIC hooks only. The Lua caps hook is
+    // reported separately (its own 'LUA HOOKS ATTACHED' line): a Lua failure
+    // must not mask a working traffic capture (run 43757858943 recorded
+    // frida_attached=no while flip/flip2/intercept were all attached).
+    var done = hooksAttached.flip && hooksAttached.flip2 && hooksAttached.intercept;
     if (done) {
         log('init', 'ALL PRIMARY HOOKS ATTACHED after ' + tries + ' attempt(s)');
     } else if (tries < 24) {
