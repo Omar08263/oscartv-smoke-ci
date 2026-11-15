@@ -10,15 +10,15 @@
 # This run establishes empirically whether the base alone installs and
 # launches on real arm64, or dies (INSTALL_FAILED_MISSING_SPLIT at install,
 # or UnsatisfiedLinkError / missing libcorona at launch).
-# APK source: GitHub release asset (262 MB, too big for a git push):
-#   https://github.com/Omar08263/oscartv-smoke-ci/releases/download/haremlik-original-7.804/haremlik-original.apk
+# APK source: GitHub release asset (262 MB, too big for a git push), downloaded
+# via the Releases API with GITHUB_TOKEN (repo is private — the anonymous
+# browser_download_url 404s; run 43696314975 proved that).
 # sha256 5c6ac832f1200e189cc6cc15432be1acb97745d0b5c2a3017e0bd194a824d96d
 # NO sign-in, NO purchase — stop at the login/home screen and report it.
 set -u
 mkdir -p artifacts
 exec > >(tee artifacts/run.log) 2>&1
 
-APK_URL="https://github.com/Omar08263/oscartv-smoke-ci/releases/download/haremlik-original-7.804/haremlik-original.apk"
 APK="haremlik-original.apk"
 APK_SHA256="5c6ac832f1200e189cc6cc15432be1acb97745d0b5c2a3017e0bd194a824d96d"
 APK_SIZE=262435198
@@ -38,8 +38,29 @@ if ! command -v adb >/dev/null; then
 fi
 adb --version | head -1 || echo "adb STILL MISSING"
 
-echo "== download APK from release asset =="
-curl -L --retry 3 --retry-delay 10 -o "$APK" "$APK_URL" 2>&1 | tail -3
+echo "== download APK from release asset (private repo: API + GITHUB_TOKEN) =="
+# Anonymous browser_download_url 404s on a private repo — download the asset
+# via the Releases API with the workflow's GITHUB_TOKEN (same-repo access).
+python3 - <<'PYEOF'
+import json, os, urllib.request
+tok = os.environ["GH_TOKEN"]
+req = urllib.request.Request(
+    "https://api.github.com/repos/Omar08263/oscartv-smoke-ci/releases/tags/haremlik-original-7.804",
+    headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"})
+rel = json.load(urllib.request.urlopen(req))
+asset = next(a for a in rel["assets"] if a["name"] == "haremlik-original.apk")
+print("asset id:", asset["id"], "size:", asset["size"])
+req = urllib.request.Request(
+    f"https://api.github.com/repos/Omar08263/oscartv-smoke-ci/releases/assets/{asset['id']}",
+    headers={"Authorization": f"Bearer {tok}", "Accept": "application/octet-stream"})
+with urllib.request.urlopen(req) as r, open("haremlik-original.apk", "wb") as f:
+    while True:
+        chunk = r.read(1 << 20)
+        if not chunk:
+            break
+        f.write(chunk)
+print("downloaded bytes:", os.path.getsize("haremlik-original.apk"))
+PYEOF
 ls -la "$APK" 2>&1
 ACTUAL_SIZE=$(stat -c%s "$APK" 2>/dev/null || echo 0)
 echo "expected size $APK_SIZE, actual $ACTUAL_SIZE"

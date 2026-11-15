@@ -24,6 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Redroid smoke test — Haremlik ORIGINAL (install + launch + logcat)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/haremlik-redroid.sh
       - uses: actions/upload-artifact@v4
         if: always()
