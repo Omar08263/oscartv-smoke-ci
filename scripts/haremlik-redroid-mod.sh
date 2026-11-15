@@ -24,12 +24,18 @@
 # (5 female portraits, name "Lou Howe", "Start your reign" bottom-center) —
 # there is NO login form on a fresh install; the game goes straight to
 # character creation (anonymous/guest flow).
-# START-YOUR-REIGN (this run): after the tap-to-start screenshots, wait for
-# the character-creation screen, locate "Start your reign" via uiautomator
-# dump (fallback: tap 360,1195 on the 720x1280 display), tap it ONCE, then
-# screenshots at +30/+90/+150 s after this tap to catch the home/main screen.
-# If a profile/avatar node is visible via uiautomator at reign+30s, tap it
-# ONCE and screenshot screen-profile.png to check for a VIP level/badge.
+# START-YOUR-REIGN (kept from run 43708060655): after the tap-to-start
+# screenshots, locate "Start your reign" via uiautomator dump (fallback: tap
+# 360,1195 on the 720x1280 display), tap it ONCE. That run reached the opening
+# STORY cutscene (rainy Ottoman cityscape, Prince Selim text, gold "»" button
+# bottom-right ~680,1235) which does NOT auto-advance.
+# STORY-WALK (this run): starting ~30 s after the "Start your reign" tap,
+# REPEAT up to 20x: tap "»" (680,1235), wait 15 s, screenshot screen-story-N.png.
+# Stop early on a big top-of-frame scene change (new scene/home) or if a
+# "Skip" button appears (tap it ONCE instead). Then screen-home.png; if home
+# was reached, tap a profile/avatar button ONCE (uiautomator node if present,
+# else the top-left avatar area ~70,90) and screenshot screen-profile.png to
+# check for a VIP level/badge. If all 20 taps leave the story, stop and report.
 # NEVER tap anything labeled price/purchase/recharge/top-up/VIP purchase.
 # NO sign-in, NO account binding, NO payment info, NO age verification.
 # v3 sha256 486e97c7620b821bcf9bbfd1607d40157a14ce4c1941546c2277492a6a9dc7f5
@@ -244,46 +250,126 @@ if [ "$INSTALL_OK" = "1" ]; then
   echo "tap START YOUR REIGN once at $REIGN_X,$REIGN_Y" | tee -a artifacts/launch.log
   adb -s "$DEV" shell input tap "$REIGN_X" "$REIGN_Y" 2>&1 || true
   echo "reign tap sent (ONE tap only)"
-  echo "== post-reign screenshots at +30s / +90s / +150s after the reign tap =="
+  echo "== STORY WALK: starting ~30s after the reign tap, tap the gold '»' advance button (680,1235) up to 20x =="
   sleep 30
   adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at reign+30s"
   adb -s "$DEV" shell dumpsys window windows 2>/dev/null | grep -i "mCurrentFocus" | head -3 || true
   adb -s "$DEV" exec-out screencap -p > artifacts/screen-reign+30s.png 2>/dev/null || true
   ls -la artifacts/screen-reign+30s.png 2>&1 || true
-  # PROFILE CHECK (once, at reign+30s): tap a profile/avatar button ONLY if
-  # uiautomator exposes such a node. Never tap price/purchase/recharge/
-  # top-up/VIP-purchase nodes. Corona usually exposes no game nodes at all —
-  # in that case NO profile tap happens and VIP is read from the screenshots.
+  # Story advance button coords, scaled from the known 720x1280 layout
+  # (gold "»" bottom-right, ~680,1235 in run 43708060655).
+  STORY_X=$((W * 680 / 720)); STORY_Y=$((H * 1235 / 1280))
+  echo "story advance '»' coords: $STORY_X,$STORY_Y (display ${W}x${H})" | tee -a artifacts/launch.log
+  STORY_TAPS=0
+  STORY_ENDED=no
+  HOME_REACHED=no
   PROFILE_TAPPED=no
-  adb -s "$DEV" shell uiautomator dump /sdcard/window_dump2.xml 2>&1 || true
-  adb -s "$DEV" pull /sdcard/window_dump2.xml artifacts/uiautomator-reign+30s.xml 2>&1 || true
-  if [ -s artifacts/uiautomator-reign+30s.xml ]; then
-    PROF_BOUNDS=$(grep -i -E "profile|avatar" artifacts/uiautomator-reign+30s.xml | grep -v -i -E "price|purchase|recharge|top.up|vip|pay|buy|pack|gem|diamond|coin" | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed 's/bounds="//; s/"//' || true)
-    echo "uiautomator profile/avatar bounds: ${PROF_BOUNDS:-<none found>}" | tee -a artifacts/launch.log
+  PREV_SHOT="artifacts/screen-reign+30s.png"
+  # Scene-change detector: the rain animation changes a few pixels between
+  # frames, and each story page only changes the text box (bottom of frame);
+  # a NEW scene changes most of the frame. Compare the TOP 60% of both shots
+  # downscaled to 72x48 grayscale; mean abs diff > 10 (of 255) = new scene.
+  # Falls back to PNG file-size delta > 20% when PIL is unavailable.
+  cat > /tmp/scene_diff.py <<'PYEOF'
+import sys
+try:
+    from PIL import Image
+    a = Image.open(sys.argv[1]).convert("L")
+    b = Image.open(sys.argv[2]).convert("L")
+    w, h = a.size
+    a = a.crop((0, 0, w, int(h * 0.6))).resize((72, 48))
+    b = b.crop((0, 0, w, int(h * 0.6))).resize((72, 48))
+    pa, pb = list(a.getdata()), list(b.getdata())
+    diff = sum(abs(x - y) for x, y in zip(pa, pb)) / len(pa)
+    print("BIG" if diff > 10 else "SAME")
+    print("mean_abs_diff=%.2f" % diff, file=sys.stderr)
+except ImportError:
+    import os
+    sa, sb = os.path.getsize(sys.argv[1]), os.path.getsize(sys.argv[2])
+    print("BIG" if abs(sa - sb) / max(sa, 1) > 0.20 else "SAME")
+except Exception as e:
+    print("diff-error: %s" % e, file=sys.stderr)
+    print("SAME")
+PYEOF
+  for N in $(seq 1 20); do
+    # "Skip" check FIRST: if a Skip button ever appears (uiautomator exposes
+    # zero Corona nodes, so this almost certainly never fires), tap it ONCE
+    # instead of the "»" button and stop the loop.
+    adb -s "$DEV" shell uiautomator dump /sdcard/window_dump_skip.xml 2>&1 | tee -a artifacts/launch.log || true
+    adb -s "$DEV" pull /sdcard/window_dump_skip.xml artifacts/uiautomator-story-$N.xml 2>&1 || true
+    SKIP_BOUNDS=$(grep -i "skip" artifacts/uiautomator-story-$N.xml 2>/dev/null | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed 's/bounds="//; s/"//' || true)
+    if [ -n "$SKIP_BOUNDS" ]; then
+      SKIP_X=$(echo "$SKIP_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[0])+int(a[2]))//2)")
+      SKIP_Y=$(echo "$SKIP_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[1])+int(a[3]))//2)")
+      echo "story tap $N/20: 'Skip' button found at $SKIP_X,$SKIP_Y — tapping it ONCE instead of '»'" | tee -a artifacts/launch.log
+      adb -s "$DEV" shell input tap "$SKIP_X" "$SKIP_Y" 2>&1 || true
+      STORY_TAPS=$((STORY_TAPS + 1))
+      sleep 15
+      adb -s "$DEV" exec-out screencap -p > artifacts/screen-story-$N.png 2>/dev/null || true
+      STORY_ENDED=yes
+      break
+    fi
+    echo "story tap $N/20 at $STORY_X,$STORY_Y" | tee -a artifacts/launch.log
+    adb -s "$DEV" shell input tap "$STORY_X" "$STORY_Y" 2>&1 || true
+    STORY_TAPS=$((STORY_TAPS + 1))
+    sleep 15
+    adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || { echo "app process NOT running after story tap $N — stopping the loop"; break; }
+    adb -s "$DEV" exec-out screencap -p > artifacts/screen-story-$N.png 2>/dev/null || true
+    ls -la artifacts/screen-story-$N.png 2>&1 || true
+    DIFF=$(python3 /tmp/scene_diff.py "$PREV_SHOT" "artifacts/screen-story-$N.png" 2>/dev/null || echo SAME)
+    echo "story tap $N: scene-diff vs previous shot = $DIFF" | tee -a artifacts/launch.log
+    if [ "$DIFF" = "BIG" ]; then
+      echo "screen changed substantially after story tap $N — story scene left (new scene/home?)" | tee -a artifacts/launch.log
+      STORY_ENDED=yes
+      break
+    fi
+    PREV_SHOT="artifacts/screen-story-$N.png"
+  done
+  echo "story walk done: taps=$STORY_TAPS story_ended=$STORY_ENDED" | tee -a artifacts/launch.log
+  echo "== final screenshots (screen-home.png) =="
+  sleep 5
+  adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at final screenshot"
+  adb -s "$DEV" shell dumpsys window windows 2>/dev/null | grep -i "mCurrentFocus" | head -3 || true
+  adb -s "$DEV" exec-out screencap -p > artifacts/screen-home.png 2>/dev/null || true
+  ls -la artifacts/screen-home.png 2>&1 || true
+  HOME_DIFF=$(python3 /tmp/scene_diff.py "$PREV_SHOT" artifacts/screen-home.png 2>/dev/null || echo SAME)
+  echo "screen-home.png scene-diff vs last story shot = $HOME_DIFF" | tee -a artifacts/launch.log
+  if [ "$STORY_ENDED" = "yes" ] || [ "$HOME_DIFF" = "BIG" ]; then
+    HOME_REACHED=yes
+  fi
+  echo "home_reached (heuristic: big scene change after the story walk; verify visually from screen-home.png): $HOME_REACHED" | tee -a artifacts/launch.log
+  # PROFILE CHECK — only if home was reached. Prefer a uiautomator
+  # profile/avatar node; else tap the top-left avatar area ONCE
+  # (~70,90 on 720x1280). Never tap price/purchase/recharge/top-up/VIP nodes.
+  # If the story never ended, NO profile tap happens (do not tap blindly).
+  if [ "$HOME_REACHED" = "yes" ]; then
+    adb -s "$DEV" shell uiautomator dump /sdcard/window_dump_home.xml 2>&1 | tee -a artifacts/launch.log || true
+    adb -s "$DEV" pull /sdcard/window_dump_home.xml artifacts/uiautomator-home.xml 2>&1 || true
+    PROF_BOUNDS=""
+    if [ -s artifacts/uiautomator-home.xml ]; then
+      PROF_BOUNDS=$(grep -i -E "profile|avatar" artifacts/uiautomator-home.xml | grep -v -i -E "price|purchase|recharge|top.up|vip|pay|buy|pack|gem|diamond|coin" | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed 's/bounds="//; s/"//' || true)
+      echo "uiautomator profile/avatar bounds: ${PROF_BOUNDS:-<none found>}" | tee -a artifacts/launch.log
+    else
+      echo "uiautomator dump at home empty/missing — using top-left avatar estimate" | tee -a artifacts/launch.log
+    fi
     if [ -n "$PROF_BOUNDS" ]; then
       PROF_X=$(echo "$PROF_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[0])+int(a[2]))//2)")
       PROF_Y=$(echo "$PROF_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[1])+int(a[3]))//2)")
-      echo "tap PROFILE/AVATAR once at $PROF_X,$PROF_Y" | tee -a artifacts/launch.log
-      adb -s "$DEV" shell input tap "$PROF_X" "$PROF_Y" 2>&1 || true
-      PROFILE_TAPPED=yes
-      sleep 10
-      adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running after profile tap"
-      adb -s "$DEV" exec-out screencap -p > artifacts/screen-profile.png 2>/dev/null || true
-      ls -la artifacts/screen-profile.png 2>&1 || true
+    else
+      PROF_X=$((W * 70 / 720)); PROF_Y=$((H * 90 / 1280))
+      echo "no profile node — tapping top-left avatar area ONCE at $PROF_X,$PROF_Y" | tee -a artifacts/launch.log
     fi
+    echo "tap PROFILE/AVATAR once at $PROF_X,$PROF_Y" | tee -a artifacts/launch.log
+    adb -s "$DEV" shell input tap "$PROF_X" "$PROF_Y" 2>&1 || true
+    PROFILE_TAPPED=yes
+    sleep 10
+    adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running after profile tap"
+    adb -s "$DEV" exec-out screencap -p > artifacts/screen-profile.png 2>/dev/null || true
+    ls -la artifacts/screen-profile.png 2>&1 || true
   else
-    echo "uiautomator dump at reign+30s empty/missing — no profile tap" | tee -a artifacts/launch.log
+    echo "home NOT reached after $STORY_TAPS story taps — no profile tap" | tee -a artifacts/launch.log
   fi
   echo "profile_tapped=$PROFILE_TAPPED" | tee -a artifacts/launch.log
-  sleep 50
-  adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at reign+90s"
-  adb -s "$DEV" exec-out screencap -p > artifacts/screen-reign+90s.png 2>/dev/null || true
-  ls -la artifacts/screen-reign+90s.png 2>&1 || true
-  sleep 60
-  adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at reign+150s"
-  adb -s "$DEV" shell dumpsys window windows 2>/dev/null | grep -i "mCurrentFocus" | head -3 || true
-  adb -s "$DEV" exec-out screencap -p > artifacts/screen-reign+150s.png 2>/dev/null || true
-  ls -la artifacts/screen-reign+150s.png 2>&1 || true
 fi
 
 echo "== capture logcat =="
@@ -316,21 +402,24 @@ fi
 echo "== screen-change heuristics (verify visually from the screenshots) =="
 LOGIN_REACHED=no
 REIGN_REACHED=no
-if [ -s artifacts/screen-reign+150s.png ] && [ -s artifacts/screen-60s.png ]; then
-  if ! cmp -s artifacts/screen-60s.png artifacts/screen-reign+150s.png; then LOGIN_REACHED=yes; fi
+if [ -s artifacts/screen-home.png ] && [ -s artifacts/screen-60s.png ]; then
+  if ! cmp -s artifacts/screen-60s.png artifacts/screen-home.png; then LOGIN_REACHED=yes; fi
 fi
 if [ -s artifacts/screen-reign+30s.png ] && [ -s artifacts/screen-tap+150s.png ]; then
   if ! cmp -s artifacts/screen-tap+150s.png artifacts/screen-reign+30s.png; then REIGN_REACHED=yes; fi
 fi
 echo "login_reached (heuristic: final screenshot differs from pre-tap shot; verify visually): $LOGIN_REACHED"
 echo "reign_reached (heuristic: screen-reign+30s.png differs from screen-tap+150s.png, i.e. left character creation): $REIGN_REACHED"
+echo "story_taps: ${STORY_TAPS:-0} story_ended: ${STORY_ENDED:-no} home_reached: ${HOME_REACHED:-no}"
 echo "profile_tapped: ${PROFILE_TAPPED:-no}"
 
 {
-  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no) login_reached=$LOGIN_REACHED reign_reached=$REIGN_REACHED profile_tapped=${PROFILE_TAPPED:-no} vip_visible=unknown"
-  echo "login_reached is a heuristic (screen-reign+150s.png differs from screen-60s.png); confirm from the screenshots"
+  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no) login_reached=$LOGIN_REACHED reign_reached=$REIGN_REACHED story_taps=${STORY_TAPS:-0} story_ended=${STORY_ENDED:-no} home_reached=${HOME_REACHED:-no} profile_tapped=${PROFILE_TAPPED:-no} vip_visible=unknown"
+  echo "login_reached is a heuristic (screen-home.png differs from screen-60s.png); confirm from the screenshots"
   echo "reign_reached is a heuristic (screen-reign+30s.png differs from screen-tap+150s.png); confirm from the screenshots"
-  echo "vip_visible=unknown: the script cannot read pixels — the operator determines VIP from screen-reign+30s/+90s/+150s.png and screen-profile.png (look for a VIP level/badge, e.g. 'VIP 16', on the home/profile screen)"
+  echo "home_reached is a heuristic (big top-of-frame scene change after the story walk); confirm from screen-home.png"
+  echo "story_taps counts '»' advance taps (+1 if a Skip button was tapped instead on the final iteration)"
+  echo "vip_visible=unknown: the script cannot read pixels — the operator determines VIP from screen-home.png and screen-profile.png (look for a VIP level/badge, e.g. 'VIP 16', on the home/profile screen)"
   echo "device: $(adb -s "$DEV" shell getprop ro.product.model 2>/dev/null) Android $(adb -s "$DEV" shell getprop ro.build.version.release 2>/dev/null) abi $(adb -s "$DEV" shell getprop ro.product.cpu.abi 2>/dev/null)"
   echo "apk: $APK (MOD VIP16+arm64 libs, sha256 $APK_SHA256) + $PAD1 (re-signed PAD1 split, sha256 $PAD1_SHA256) via install-multiple"
 } | tee artifacts/RESULT.md
