@@ -30,12 +30,12 @@ on:
       frida_script:
         description: 'Frida script in the repo to attach (e.g. scripts/frida/haremlik-dynrea-baseline.js)'
         required: false
-        default: 'scripts/frida/haremlik-dynrea-wireforge.js'
+        default: 'scripts/frida/haremlik-dynrea-baseline.js'
         type: string
       soak_seconds:
         description: 'Seconds to hold at home with Frida attached after the story walk'
         required: false
-        default: '1500'
+        default: '90'
         type: string
 jobs:
   dynrea:
@@ -46,8 +46,8 @@ jobs:
       - name: Redroid + Frida dynamic REA — Haremlik v4 (install + launch + home + plaintext traffic)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          FRIDA_SCRIPT: ${{ inputs.frida_script || 'scripts/frida/haremlik-dynrea-wireforge.js' }}
-          SOAK_SECONDS: ${{ inputs.soak_seconds || '1500' }}
+          FRIDA_SCRIPT: ${{ inputs.frida_script || 'scripts/frida/haremlik-dynrea-baseline.js' }}
+          SOAK_SECONDS: ${{ inputs.soak_seconds || '90' }}
         run: bash scripts/haremlik-dynrea.sh
       - uses: actions/upload-artifact@v4
         if: always()
