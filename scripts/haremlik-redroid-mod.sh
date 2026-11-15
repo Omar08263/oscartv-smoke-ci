@@ -17,10 +17,21 @@
 # APK sources: GitHub release assets on tag haremlik-mod-7.804-v3 (too big for
 # a git push), downloaded via the Releases API with GITHUB_TOKEN (repo is
 # private — the anonymous browser_download_url 404s; run 43696314975 proved that).
-# TAP-TO-START (this run): run 43706400720 reached the "Tap to start" screen
-# at 60 s; this run waits to 75 s, taps center-screen (tap 2 at lower-center
-# only if the screen is unchanged 15 s after tap 1), then screenshots at
-# +30/+90/+150 s after the tap to catch the login screen. NO sign-in.
+# TAP-TO-START (kept from run 43707233559): run 43706400720 reached the
+# "Tap to start" screen at 60 s; this run waits to 75 s, taps center-screen
+# (tap 2 at lower-center only if the screen is unchanged 15 s after tap 1),
+# then screenshots at +30/+90/+150 s. That run reached CHARACTER CREATION
+# (5 female portraits, name "Lou Howe", "Start your reign" bottom-center) —
+# there is NO login form on a fresh install; the game goes straight to
+# character creation (anonymous/guest flow).
+# START-YOUR-REIGN (this run): after the tap-to-start screenshots, wait for
+# the character-creation screen, locate "Start your reign" via uiautomator
+# dump (fallback: tap 360,1195 on the 720x1280 display), tap it ONCE, then
+# screenshots at +30/+90/+150 s after this tap to catch the home/main screen.
+# If a profile/avatar node is visible via uiautomator at reign+30s, tap it
+# ONCE and screenshot screen-profile.png to check for a VIP level/badge.
+# NEVER tap anything labeled price/purchase/recharge/top-up/VIP purchase.
+# NO sign-in, NO account binding, NO payment info, NO age verification.
 # v3 sha256 486e97c7620b821bcf9bbfd1607d40157a14ce4c1941546c2277492a6a9dc7f5
 # PAD1 sha256 5061d7f48b834d09932d5040d3bfba761fa184b4fbe76cb93a3dc9c0e184816a
 # NO sign-in, NO purchase — stop at the login/home screen and report it.
@@ -210,6 +221,69 @@ if [ "$INSTALL_OK" = "1" ]; then
   adb -s "$DEV" shell dumpsys window windows 2>/dev/null | grep -i "mCurrentFocus" | head -3 || true
   adb -s "$DEV" exec-out screencap -p > artifacts/screen-tap+150s.png 2>/dev/null || true
   ls -la artifacts/screen-tap+150s.png 2>&1 || true
+  echo "== START-YOUR-REIGN: character-creation screen should be up; tap 'Start your reign' ONCE =="
+  adb -s "$DEV" exec-out screencap -p > artifacts/screen-reign-pre.png 2>/dev/null || true
+  ls -la artifacts/screen-reign-pre.png 2>&1 || true
+  # Fallback coords: button bottom-center, ~360,1195 on the 720x1280 display
+  # (seen in run 43707233559 screenshots). Prefer uiautomator when it finds it.
+  REIGN_X=$((W / 2)); REIGN_Y=$((H * 1195 / 1280))
+  echo "reign fallback coords: $REIGN_X,$REIGN_Y (display ${W}x${H})" | tee -a artifacts/launch.log
+  adb -s "$DEV" shell uiautomator dump /sdcard/window_dump.xml 2>&1 | tee -a artifacts/launch.log || true
+  adb -s "$DEV" pull /sdcard/window_dump.xml artifacts/uiautomator-reign-pre.xml 2>&1 || true
+  if [ -s artifacts/uiautomator-reign-pre.xml ]; then
+    REIGN_BOUNDS=$(grep -i "Start your reign" artifacts/uiautomator-reign-pre.xml | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed 's/bounds="//; s/"//' || true)
+    echo "uiautomator 'Start your reign' bounds: ${REIGN_BOUNDS:-<not found>}" | tee -a artifacts/launch.log
+    if [ -n "$REIGN_BOUNDS" ]; then
+      REIGN_X=$(echo "$REIGN_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[0])+int(a[2]))//2)")
+      REIGN_Y=$(echo "$REIGN_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[1])+int(a[3]))//2)")
+      echo "reign tap coords from uiautomator: $REIGN_X,$REIGN_Y" | tee -a artifacts/launch.log
+    fi
+  else
+    echo "uiautomator dump empty/missing — using fallback coords" | tee -a artifacts/launch.log
+  fi
+  echo "tap START YOUR REIGN once at $REIGN_X,$REIGN_Y" | tee -a artifacts/launch.log
+  adb -s "$DEV" shell input tap "$REIGN_X" "$REIGN_Y" 2>&1 || true
+  echo "reign tap sent (ONE tap only)"
+  echo "== post-reign screenshots at +30s / +90s / +150s after the reign tap =="
+  sleep 30
+  adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at reign+30s"
+  adb -s "$DEV" shell dumpsys window windows 2>/dev/null | grep -i "mCurrentFocus" | head -3 || true
+  adb -s "$DEV" exec-out screencap -p > artifacts/screen-reign+30s.png 2>/dev/null || true
+  ls -la artifacts/screen-reign+30s.png 2>&1 || true
+  # PROFILE CHECK (once, at reign+30s): tap a profile/avatar button ONLY if
+  # uiautomator exposes such a node. Never tap price/purchase/recharge/
+  # top-up/VIP-purchase nodes. Corona usually exposes no game nodes at all —
+  # in that case NO profile tap happens and VIP is read from the screenshots.
+  PROFILE_TAPPED=no
+  adb -s "$DEV" shell uiautomator dump /sdcard/window_dump2.xml 2>&1 || true
+  adb -s "$DEV" pull /sdcard/window_dump2.xml artifacts/uiautomator-reign+30s.xml 2>&1 || true
+  if [ -s artifacts/uiautomator-reign+30s.xml ]; then
+    PROF_BOUNDS=$(grep -i -E "profile|avatar" artifacts/uiautomator-reign+30s.xml | grep -v -i -E "price|purchase|recharge|top.up|vip|pay|buy|pack|gem|diamond|coin" | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed 's/bounds="//; s/"//' || true)
+    echo "uiautomator profile/avatar bounds: ${PROF_BOUNDS:-<none found>}" | tee -a artifacts/launch.log
+    if [ -n "$PROF_BOUNDS" ]; then
+      PROF_X=$(echo "$PROF_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[0])+int(a[2]))//2)")
+      PROF_Y=$(echo "$PROF_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[1])+int(a[3]))//2)")
+      echo "tap PROFILE/AVATAR once at $PROF_X,$PROF_Y" | tee -a artifacts/launch.log
+      adb -s "$DEV" shell input tap "$PROF_X" "$PROF_Y" 2>&1 || true
+      PROFILE_TAPPED=yes
+      sleep 10
+      adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running after profile tap"
+      adb -s "$DEV" exec-out screencap -p > artifacts/screen-profile.png 2>/dev/null || true
+      ls -la artifacts/screen-profile.png 2>&1 || true
+    fi
+  else
+    echo "uiautomator dump at reign+30s empty/missing — no profile tap" | tee -a artifacts/launch.log
+  fi
+  echo "profile_tapped=$PROFILE_TAPPED" | tee -a artifacts/launch.log
+  sleep 50
+  adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at reign+90s"
+  adb -s "$DEV" exec-out screencap -p > artifacts/screen-reign+90s.png 2>/dev/null || true
+  ls -la artifacts/screen-reign+90s.png 2>&1 || true
+  sleep 60
+  adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at reign+150s"
+  adb -s "$DEV" shell dumpsys window windows 2>/dev/null | grep -i "mCurrentFocus" | head -3 || true
+  adb -s "$DEV" exec-out screencap -p > artifacts/screen-reign+150s.png 2>/dev/null || true
+  ls -la artifacts/screen-reign+150s.png 2>&1 || true
 fi
 
 echo "== capture logcat =="
@@ -239,16 +313,24 @@ else
   echo "no native-lib/split error lines in logcat"
 fi
 
-echo "== login-reached heuristic (final post-tap screenshot vs pre-tap 60s shot) =="
+echo "== screen-change heuristics (verify visually from the screenshots) =="
 LOGIN_REACHED=no
-if [ -s artifacts/screen-tap+150s.png ] && [ -s artifacts/screen-60s.png ]; then
-  if ! cmp -s artifacts/screen-60s.png artifacts/screen-tap+150s.png; then LOGIN_REACHED=yes; fi
+REIGN_REACHED=no
+if [ -s artifacts/screen-reign+150s.png ] && [ -s artifacts/screen-60s.png ]; then
+  if ! cmp -s artifacts/screen-60s.png artifacts/screen-reign+150s.png; then LOGIN_REACHED=yes; fi
+fi
+if [ -s artifacts/screen-reign+30s.png ] && [ -s artifacts/screen-tap+150s.png ]; then
+  if ! cmp -s artifacts/screen-tap+150s.png artifacts/screen-reign+30s.png; then REIGN_REACHED=yes; fi
 fi
 echo "login_reached (heuristic: final screenshot differs from pre-tap shot; verify visually): $LOGIN_REACHED"
+echo "reign_reached (heuristic: screen-reign+30s.png differs from screen-tap+150s.png, i.e. left character creation): $REIGN_REACHED"
+echo "profile_tapped: ${PROFILE_TAPPED:-no}"
 
 {
-  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no) login_reached=$LOGIN_REACHED"
-  echo "login_reached is a heuristic (screen-tap+150s.png differs from screen-60s.png); confirm from the screenshots"
+  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no) login_reached=$LOGIN_REACHED reign_reached=$REIGN_REACHED profile_tapped=${PROFILE_TAPPED:-no} vip_visible=unknown"
+  echo "login_reached is a heuristic (screen-reign+150s.png differs from screen-60s.png); confirm from the screenshots"
+  echo "reign_reached is a heuristic (screen-reign+30s.png differs from screen-tap+150s.png); confirm from the screenshots"
+  echo "vip_visible=unknown: the script cannot read pixels — the operator determines VIP from screen-reign+30s/+90s/+150s.png and screen-profile.png (look for a VIP level/badge, e.g. 'VIP 16', on the home/profile screen)"
   echo "device: $(adb -s "$DEV" shell getprop ro.product.model 2>/dev/null) Android $(adb -s "$DEV" shell getprop ro.build.version.release 2>/dev/null) abi $(adb -s "$DEV" shell getprop ro.product.cpu.abi 2>/dev/null)"
   echo "apk: $APK (MOD VIP16+arm64 libs, sha256 $APK_SHA256) + $PAD1 (re-signed PAD1 split, sha256 $PAD1_SHA256) via install-multiple"
 } | tee artifacts/RESULT.md
