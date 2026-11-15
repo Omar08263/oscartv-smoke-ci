@@ -1,25 +1,24 @@
 #!/usr/bin/env bash
-# Haremlik Al-Sultan MOD APK v3 (VIP16 client patch + 33 REAL split arm64 libs incl.
-# libclthkasc.so + obbLogic nil-guard) on Redroid (arm64 Android userspace,
-# NO KVM) — MOD proof test: does the single-APK mod install, launch, and
-# REACH THE LOGIN SCREEN? v2 (run 43703235663) installed, Corona started,
-# loading hit 100%, but stalled on the updater's Lua error
-# "obbLogic.lua:45: json.decode called with nil string" (obbList.json absent
-# with no asset pack installed); v3 makes getOrigObb() return {} instead —
-# this run must prove the updater gate is passed and login is reached.
+# Haremlik Al-Sultan MOD APK v3 + re-signed PAD1 asset pack (install-time split)
+# on Redroid (arm64 Android userspace, NO KVM) — PAD1 SPLIT TEST: does
+# `adb install-multiple` (v3 base + PAD1) install, launch, and REACH THE
+# LOGIN SCREEN? v3 alone (run 43705039971) installed, Corona started, login
+# scene started — but died at subpackagePart.lua:162 (nil subPackName) because
+# the sprite assets/pack/effect/start_light.png (127,242 B) exists ONLY in
+# PAD1.apk, the Play install-time asset pack (1.42 GB, 25,937 files under
+# assets/assets/, split='PAD1', versionCode 66780401). The game was DESIGNED
+# to be installed as base + PAD1 split. PAD1 was re-signed with OUR keystore
+# (splits must share the base's signing key; same cert SHA-256 as v3).
 # App: com.dc.hwsj v66780401/7.804 MOD, launcher com.dc.angry.gen.StartupActivity,
 # Solar2D (Corona) 3718.4701, label "Game of Sultans".
-# Split fix: manifest split requirements removed; 33 REAL arm64 .so from the
-# 7.804 config.arm64_v8a split (incl. libclthkasc.so KSecure + APM Insight libs)
-# bundled in lib/arm64-v8a/ (STORED), replacing the 10 CoronaCards stubs of v1.
 # VIP patch: client-side VIP 16 (dataMod/roleMod/_vipMod/vipLogic); real premium
-# stays server-side. This run proves install (no MISSING_SPLIT) + launch
-# (no UnsatisfiedLinkError, no FATAL) + login/home screen reached.
-# APK source: GitHub release asset (292 MB, too big for a git push), downloaded
-# via the Releases API with GITHUB_TOKEN (repo is private — the anonymous
-# browser_download_url 404s; run 43696314975 proved that).
+# stays server-side. This run proves install-multiple + launch (no FATAL) +
+# login screen reached (subPackName error gone).
+# APK sources: GitHub release assets on tag haremlik-mod-7.804-v3 (too big for
+# a git push), downloaded via the Releases API with GITHUB_TOKEN (repo is
+# private — the anonymous browser_download_url 404s; run 43696314975 proved that).
 # v3 sha256 486e97c7620b821bcf9bbfd1607d40157a14ce4c1941546c2277492a6a9dc7f5
-# (v2 sha256 7f6e3cc9eddaf376c3d0e9292543fdd749890c052cbd7bf01778bb4d22fe0cb6)
+# PAD1 sha256 5061d7f48b834d09932d5040d3bfba761fa184b4fbe76cb93a3dc9c0e184816a
 # NO sign-in, NO purchase — stop at the login/home screen and report it.
 set -u
 mkdir -p artifacts
@@ -28,6 +27,9 @@ exec > >(tee artifacts/run.log) 2>&1
 APK="Haremlik-v7.804-premium-v3.apk"
 APK_SHA256="486e97c7620b821bcf9bbfd1607d40157a14ce4c1941546c2277492a6a9dc7f5"
 APK_SIZE=291620338
+PAD1="Haremlik-v7.804-PAD1-resigned.apk"
+PAD1_SHA256="5061d7f48b834d09932d5040d3bfba761fa184b4fbe76cb93a3dc9c0e184816a"
+PAD1_SIZE=1421381979
 PKG="com.dc.hwsj"
 ACT="com.dc.hwsj/com.dc.angry.gen.StartupActivity"
 DEV="localhost:5555"
@@ -44,8 +46,8 @@ if ! command -v adb >/dev/null; then
 fi
 adb --version | head -1 || echo "adb STILL MISSING"
 
-echo "== download APK from release asset (private repo: API + GITHUB_TOKEN) =="
-# Anonymous browser_download_url 404s on a private repo — download the asset
+echo "== download APKs from release assets (private repo: API + GITHUB_TOKEN) =="
+# Anonymous browser_download_url 404s on a private repo — download the assets
 # via the Releases API with the workflow's GITHUB_TOKEN (same-repo access).
 python3 - <<'PYEOF'
 import json, os, urllib.request
@@ -54,28 +56,37 @@ req = urllib.request.Request(
     "https://api.github.com/repos/Omar08263/oscartv-smoke-ci/releases/tags/haremlik-mod-7.804-v3",
     headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"})
 rel = json.load(urllib.request.urlopen(req))
-asset = next(a for a in rel["assets"] if a["name"] == "Haremlik-v7.804-premium-v3.apk")
-print("asset id:", asset["id"], "size:", asset["size"])
-req = urllib.request.Request(
-    f"https://api.github.com/repos/Omar08263/oscartv-smoke-ci/releases/assets/{asset['id']}",
-    headers={"Authorization": f"Bearer {tok}", "Accept": "application/octet-stream"})
-with urllib.request.urlopen(req) as r, open("Haremlik-v7.804-premium-v3.apk", "wb") as f:
-    while True:
-        chunk = r.read(1 << 20)
-        if not chunk:
-            break
-        f.write(chunk)
-print("downloaded bytes:", os.path.getsize("Haremlik-v7.804-premium-v3.apk"))
+for name in ("Haremlik-v7.804-premium-v3.apk", "Haremlik-v7.804-PAD1-resigned.apk"):
+    asset = next(a for a in rel["assets"] if a["name"] == name)
+    print("asset id:", asset["id"], "size:", asset["size"], "name:", name)
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/Omar08263/oscartv-smoke-ci/releases/assets/{asset['id']}",
+        headers={"Authorization": f"Bearer {tok}", "Accept": "application/octet-stream"})
+    with urllib.request.urlopen(req) as r, open(name, "wb") as f:
+        while True:
+            chunk = r.read(1 << 20)
+            if not chunk:
+                break
+            f.write(chunk)
+    print("downloaded bytes:", os.path.getsize(name), "name:", name)
 PYEOF
-ls -la "$APK" 2>&1
+ls -la "$APK" "$PAD1" 2>&1
 ACTUAL_SIZE=$(stat -c%s "$APK" 2>/dev/null || echo 0)
-echo "expected size $APK_SIZE, actual $ACTUAL_SIZE"
+echo "expected base size $APK_SIZE, actual $ACTUAL_SIZE"
 if [ "$ACTUAL_SIZE" != "$APK_SIZE" ]; then
   echo "APK SIZE MISMATCH — download incomplete or wrong file"
   echo "RESULT: APK_DOWNLOAD_FAILED" > artifacts/RESULT.md
   exit 1
 fi
-echo "$APK_SHA256  $APK" | sha256sum -c - 2>&1 || { echo "SHA256 MISMATCH"; exit 1; }
+echo "$APK_SHA256  $APK" | sha256sum -c - 2>&1 || { echo "SHA256 MISMATCH (base)"; exit 1; }
+ACTUAL_PAD1_SIZE=$(stat -c%s "$PAD1" 2>/dev/null || echo 0)
+echo "expected PAD1 size $PAD1_SIZE, actual $ACTUAL_PAD1_SIZE"
+if [ "$ACTUAL_PAD1_SIZE" != "$PAD1_SIZE" ]; then
+  echo "PAD1 SIZE MISMATCH — download incomplete or wrong file"
+  echo "RESULT: PAD1_DOWNLOAD_FAILED" > artifacts/RESULT.md
+  exit 1
+fi
+echo "$PAD1_SHA256  $PAD1" | sha256sum -c - 2>&1 || { echo "SHA256 MISMATCH (PAD1)"; exit 1; }
 
 echo "== kernel modules (binder/ashmem) =="
 ls /dev/binder* /dev/ashmem 2>&1 || true
@@ -123,19 +134,19 @@ adb -s "$DEV" shell getprop ro.build.version.release
 adb -s "$DEV" shell getprop ro.product.model
 adb -s "$DEV" shell uname -m
 
-echo "== install APK =="
+echo "== install base + PAD1 split (install-multiple) =="
 adb -s "$DEV" logcat -c 2>&1 || true
-adb -s "$DEV" install -r -g "$APK" 2>&1 | tee artifacts/install.log
+adb -s "$DEV" install-multiple -r -g "$APK" "$PAD1" 2>&1 | tee artifacts/install.log
 if ! grep -q "Success" artifacts/install.log; then
-  echo "install attempt 1 failed, retrying once after 30s"
+  echo "install-multiple attempt 1 failed, retrying once after 30s"
   sleep 30
-  adb -s "$DEV" install -r -g "$APK" 2>&1 | tee -a artifacts/install.log
+  adb -s "$DEV" install-multiple -r -g "$APK" "$PAD1" 2>&1 | tee -a artifacts/install.log
 fi
 if grep -q "Success" artifacts/install.log; then
   INSTALL_OK=1
-  echo "INSTALL: SUCCESS"
+  echo "INSTALL-MULTIPLE: SUCCESS"
 else
-  echo "INSTALL: FAILED"
+  echo "INSTALL-MULTIPLE: FAILED"
 fi
 adb -s "$DEV" shell pm path "$PKG" 2>&1 | tee -a artifacts/install.log || true
 adb -s "$DEV" shell dumpsys package "$PKG" 2>/dev/null | grep -E "versionCode|versionName|split" | head -10 || true
@@ -172,6 +183,7 @@ echo "== FATAL / missing-native-lib scan =="
 grep -i -B2 -A40 "FATAL EXCEPTION" artifacts/logcat.txt > artifacts/fatal.txt 2>/dev/null || true
 grep -i -E "UnsatisfiedLinkError|libcorona|missing.*split|INSTALL_FAILED_MISSING_SPLIT|dlopen failed|library .* not found|No implementation found|System\.loadLibrary" artifacts/logcat.txt > artifacts/native-lib-lines.txt 2>/dev/null || true
 grep -i -E "Corona|Solar2D|com\.ansca" artifacts/logcat.txt | head -40 > artifacts/corona-lines.txt 2>/dev/null || true
+grep -i -E "subPackName|subpackagePart|start_light" artifacts/logcat.txt > artifacts/subpack-lines.txt 2>/dev/null || true
 if [ -s artifacts/fatal.txt ]; then
   echo "FATAL EXCEPTION FOUND:"
   cat artifacts/fatal.txt
@@ -186,9 +198,9 @@ else
 fi
 
 {
-  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no)"
+  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no)"
   echo "device: $(adb -s "$DEV" shell getprop ro.product.model 2>/dev/null) Android $(adb -s "$DEV" shell getprop ro.build.version.release 2>/dev/null) abi $(adb -s "$DEV" shell getprop ro.product.cpu.abi 2>/dev/null)"
-  echo "apk: $APK (MOD VIP16+arm64 libs, sha256 $APK_SHA256)"
+  echo "apk: $APK (MOD VIP16+arm64 libs, sha256 $APK_SHA256) + $PAD1 (re-signed PAD1 split, sha256 $PAD1_SHA256) via install-multiple"
 } | tee artifacts/RESULT.md
 
 docker rm -f redroid >/dev/null 2>&1 || true
