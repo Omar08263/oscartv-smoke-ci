@@ -30,7 +30,7 @@
 # STORY cutscene (rainy Ottoman cityscape, Prince Selim text, gold "»" button
 # bottom-right ~680,1235) which does NOT auto-advance.
 # STORY-WALK (this run): starting ~30 s after the "Start your reign" tap,
-# REPEAT up to 20x: tap "»" (680,1235), wait 15 s, screenshot screen-story-N.png.
+# REPEAT up to 40x: tap "»" (680,1235), wait 15 s, screenshot screen-story-N.png.
 # Stop early on a big top-of-frame scene change (new scene/home) or if a
 # "Skip" button appears (tap it ONCE instead). FIX (this run): PREV_SHOT is
 # updated on the breaking iteration too, so the later home comparison is
@@ -53,6 +53,9 @@
 # new Sultan!", with the "»" button back). So after the decree center-tap,
 # RESUME the "»" story loop (up to 20 more taps, screen-story2-N.png) and stop
 # early ONLY on a big scene change to a NON-story screen (scene-diff BIG).
+# Walk 2 runs WHENEVER walk 1 ends still in dialogue (a story page with a "»"
+# button) — NOT only when decree_advanced=yes (that gate starved walk 2 in
+# runs 43711691091 + 43712648675, where walk 1 ran out of taps mid-story).
 # home_reached=yes is set ONLY on that big scene change after the resumed walk
 # (never from decree_advanced alone — that was the run 43710283715 false
 # positive); the operator verifies home from screen-home.png pixels.
@@ -342,7 +345,7 @@ if [ "$INSTALL_OK" = "1" ]; then
   echo "tap START YOUR REIGN once at $REIGN_X,$REIGN_Y" | tee -a artifacts/launch.log
   adb -s "$DEV" shell input tap "$REIGN_X" "$REIGN_Y" 2>&1 || true
   echo "reign tap sent (ONE tap only)"
-  echo "== STORY WALK: starting ~30s after the reign tap, tap the gold '»' advance button (680,1235) up to 20x =="
+  echo "== STORY WALK: starting ~30s after the reign tap, tap the gold '»' advance button (680,1235) up to 40x =="
   sleep 30
   adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at reign+30s"
   adb -s "$DEV" shell dumpsys window windows 2>/dev/null | grep -i "mCurrentFocus" | head -3 || true
@@ -354,6 +357,7 @@ if [ "$INSTALL_OK" = "1" ]; then
   echo "story advance '»' coords: $STORY_X,$STORY_Y (display ${W}x${H})" | tee -a artifacts/launch.log
   STORY_TAPS=0
   STORY_ENDED=no
+  DETECTOR_FAILED=no
   HOME_REACHED=no
   PROFILE_TAPPED=no
   PREV_SHOT="artifacts/screen-reign+30s.png"
@@ -361,48 +365,173 @@ if [ "$INSTALL_OK" = "1" ]; then
   # frames, and each story page only changes the text box (bottom of frame);
   # a NEW scene changes most of the frame. Compare the TOP 60% of both shots
   # downscaled to 72x48 grayscale; mean abs diff > 10 (of 255) = new scene.
-  # Falls back to PNG file-size delta > 20% when PIL is unavailable.
+  # STDLIB ONLY (zlib + struct PNG decoder in /tmp/pngmini.py) — the GitHub
+  # runner has NO PIL, and the old PIL code + file-size fallback silently
+  # masked that (runs 43711691091 + 43712648675). On ANY error the detector
+  # exits non-zero and prints the error to stderr — NEVER a silent fallback.
+  cat > /tmp/pngmini.py <<'PYEOF'
+import struct, zlib
+
+def _unfilter(raw, w, h, bpp, stride):
+    # Returns rows as a list of bytearrays (unfiltered scanlines).
+    rows = []
+    prev = bytearray(stride)
+    p = 0
+    for _y in range(h):
+        ftype = raw[p]; p += 1
+        line = bytearray(raw[p:p + stride]); p += stride
+        if ftype == 0:
+            pass
+        elif ftype == 1:
+            for i in range(bpp, stride):
+                line[i] = (line[i] + line[i - bpp]) & 0xFF
+        elif ftype == 2:
+            for i in range(stride):
+                line[i] = (line[i] + prev[i]) & 0xFF
+        elif ftype == 3:
+            for i in range(stride):
+                a = line[i - bpp] if i >= bpp else 0
+                line[i] = (line[i] + ((a + prev[i]) >> 1)) & 0xFF
+        elif ftype == 4:
+            for i in range(stride):
+                a = line[i - bpp] if i >= bpp else 0
+                b = prev[i]
+                c = prev[i - bpp] if i >= bpp else 0
+                pa = abs(b - c); pb = abs(a - c); pc = abs(a + b - 2 * c)
+                pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                line[i] = (line[i] + pr) & 0xFF
+        else:
+            raise ValueError("unknown PNG filter %d" % ftype)
+        rows.append(line)
+        prev = line
+    return rows
+
+def read_png(path):
+    # Returns (width, height, channels, pixels) with 8-bit samples per
+    # channel; palette images are expanded to RGB. No PIL, stdlib only.
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG file: %s" % path)
+    pos = 8
+    idat = b""
+    plte = None
+    w = h = None
+    bit_depth = color_type = interlace = None
+    while pos < len(data):
+        (length,) = struct.unpack(">I", data[pos:pos + 4])
+        ctype = data[pos + 4:pos + 8]
+        chunk = data[pos + 8:pos + 8 + length]
+        if ctype == b"IHDR":
+            w, h, bit_depth, color_type, _comp, _filt, interlace = struct.unpack(">IIBBBBB", chunk)
+            if interlace != 0:
+                raise ValueError("interlaced PNG not supported: %s" % path)
+            if bit_depth not in (8, 16):
+                raise ValueError("unsupported PNG bit depth %d: %s" % (bit_depth, path))
+        elif ctype == b"PLTE":
+            plte = chunk
+        elif ctype == b"IDAT":
+            idat += chunk
+        elif ctype == b"IEND":
+            break
+        pos += 12 + length
+    if w is None:
+        raise ValueError("no IHDR in PNG: %s" % path)
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
+    bpp = channels * (bit_depth // 8)  # bytes per pixel for filtering
+    stride = w * bpp
+    raw = zlib.decompress(idat)
+    if len(raw) < h * (stride + 1):
+        raise ValueError("truncated PNG data: %s" % path)
+    rows = _unfilter(raw, w, h, bpp, stride)
+    px = bytearray(w * h * 3)
+    for y, line in enumerate(rows):
+        if bit_depth == 16:
+            row = bytes(line[i] for i in range(0, stride, 2))  # high byte
+        else:
+            row = bytes(line)
+        if color_type == 3:
+            if plte is None:
+                raise ValueError("palette PNG without PLTE: %s" % path)
+            rgb = bytearray()
+            for idx in row:
+                rgb += plte[idx * 3:idx * 3 + 3]
+            row = bytes(rgb)
+        out = y * w * 3
+        if color_type in (0, 3):
+            for x in range(w):
+                v = row[x]
+                px[out + x * 3] = v; px[out + x * 3 + 1] = v; px[out + x * 3 + 2] = v
+        elif color_type == 4:
+            for x in range(w):
+                v = row[x * 2]
+                px[out + x * 3] = v; px[out + x * 3 + 1] = v; px[out + x * 3 + 2] = v
+        else:
+            px[out:out + w * 3] = row[:w * 3]
+    return w, h, 3, bytes(px)
+
+def gray_at(px, w, x, y):
+    o = (y * w + x) * 3
+    return (px[o] * 299 + px[o + 1] * 587 + px[o + 2] * 114) // 1000
+PYEOF
   cat > /tmp/scene_diff.py <<'PYEOF'
-import sys
+import sys, traceback
+sys.path.insert(0, "/tmp")
 try:
-    from PIL import Image
-    a = Image.open(sys.argv[1]).convert("L")
-    b = Image.open(sys.argv[2]).convert("L")
-    w, h = a.size
-    a = a.crop((0, 0, w, int(h * 0.6))).resize((72, 48))
-    b = b.crop((0, 0, w, int(h * 0.6))).resize((72, 48))
-    pa, pb = list(a.getdata()), list(b.getdata())
-    diff = sum(abs(x - y) for x, y in zip(pa, pb)) / len(pa)
+    from pngmini import read_png, gray_at
+    w1, h1, _c1, p1 = read_png(sys.argv[1])
+    w2, h2, _c2, p2 = read_png(sys.argv[2])
+    tot = 0; n = 0
+    for gy in range(48):
+        y1 = int((gy + 0.5) * (h1 * 0.6) / 48)
+        y2 = int((gy + 0.5) * (h2 * 0.6) / 48)
+        for gx in range(72):
+            x1 = int((gx + 0.5) * w1 / 72)
+            x2 = int((gx + 0.5) * w2 / 72)
+            tot += abs(gray_at(p1, w1, x1, y1) - gray_at(p2, w2, x2, y2)); n += 1
+    diff = tot / n
     print("BIG" if diff > 10 else "SAME")
     print("mean_abs_diff=%.2f" % diff, file=sys.stderr)
-except ImportError:
-    import os
-    sa, sb = os.path.getsize(sys.argv[1]), os.path.getsize(sys.argv[2])
-    print("BIG" if abs(sa - sb) / max(sa, 1) > 0.20 else "SAME")
-except Exception as e:
-    print("diff-error: %s" % e, file=sys.stderr)
-    print("SAME")
+except Exception:
+    traceback.print_exc(file=sys.stderr)
+    sys.exit(1)
 PYEOF
   # Story-page detector: prints STORY if the bottom strip (y 0.80-0.97h) is a
   # light parchment dialogue box (mean luminance > 170), else OTHER. A normal
-  # story page measures ~196-205; decree scroll 26; title 33; char-creation 41.
-  # Falls back to STORY (keep tapping) if PIL is unavailable.
+  # story page measures ~196-205; decree scroll 26-53; title 33; char-creation 41.
+  # STDLIB ONLY (see /tmp/pngmini.py). On ANY error: traceback to stderr and
+  # exit 1 — NEVER silently default to STORY (that dead-detector bug stalled
+  # runs 43711691091 + 43712648675 mid-story).
   cat > /tmp/story_page.py <<'PYEOF'
-import sys
+import sys, traceback
+sys.path.insert(0, "/tmp")
 try:
-    from PIL import Image
-    im = Image.open(sys.argv[1]).convert("L")
-    w, h = im.size
-    strip = im.crop((0, int(h * 0.80), w, int(h * 0.97)))
-    px = list(strip.getdata())
-    lum = sum(px) / len(px)
+    from pngmini import read_png, gray_at
+    w, h, _c, px = read_png(sys.argv[1])
+    y0 = int(h * 0.80); y1 = int(h * 0.97)
+    tot = 0; n = 0
+    for y in range(y0, y1, 2):
+        for x in range(0, w, 4):
+            tot += gray_at(px, w, x, y); n += 1
+    lum = tot / n
     print("STORY" if lum > 170 else "OTHER")
     print("bottom_lum=%.1f" % lum, file=sys.stderr)
-except Exception as e:
-    print("story-page-error: %s" % e, file=sys.stderr)
-    print("STORY")
+except Exception:
+    traceback.print_exc(file=sys.stderr)
+    sys.exit(1)
 PYEOF
-  for N in $(seq 1 20); do
+  echo "== DETECTOR SELF-TEST (known screenshots, before the walk depends on it) =="
+  TEST_REIGN=$(python3 /tmp/story_page.py artifacts/screen-reign+30s.png 2>artifacts/detector-test-reign.log || echo DETECTOR_FAIL)
+  echo "self-test story detector on screen-reign+30s.png (story page, expect STORY): verdict=$TEST_REIGN $(cat artifacts/detector-test-reign.log)" | tee -a artifacts/launch.log
+  TEST_CHAR=$(python3 /tmp/story_page.py artifacts/screen-tap+150s.png 2>artifacts/detector-test-charcreate.log || echo DETECTOR_FAIL)
+  echo "self-test story detector on screen-tap+150s.png (char creation, expect OTHER): verdict=$TEST_CHAR $(cat artifacts/detector-test-charcreate.log)" | tee -a artifacts/launch.log
+  TEST_DIFF=$(python3 /tmp/scene_diff.py artifacts/screen-60s.png artifacts/screen-tap+150s.png 2>artifacts/detector-test-diff.log || echo DIFF_FAIL)
+  echo "self-test scene_diff screen-60s.png vs screen-tap+150s.png (different screens, expect BIG): verdict=$TEST_DIFF $(cat artifacts/detector-test-diff.log)" | tee -a artifacts/launch.log
+  if [ "$TEST_REIGN" = "DETECTOR_FAIL" ] || [ "$TEST_CHAR" = "DETECTOR_FAIL" ] || [ "$TEST_DIFF" = "DIFF_FAIL" ]; then
+    echo "!!! DETECTOR SELF-TEST FAILED — the pixel detectors do not run on this runner; failing loudly (see artifacts/detector-test-*.log). The walk below will stop at the first detector call." | tee -a artifacts/launch.log
+    DETECTOR_FAILED=yes
+  fi
+  for N in $(seq 1 40); do
     # "Skip" check FIRST: if a Skip button ever appears (uiautomator exposes
     # zero Corona nodes, so this almost certainly never fires), tap it ONCE
     # instead of the "»" button and stop the loop.
@@ -420,15 +549,18 @@ PYEOF
       STORY_ENDED=yes
       break
     fi
-    echo "story tap $N/20 at $STORY_X,$STORY_Y" | tee -a artifacts/launch.log
+    echo "story tap $N/40 at $STORY_X,$STORY_Y" | tee -a artifacts/launch.log
     adb -s "$DEV" shell input tap "$STORY_X" "$STORY_Y" 2>&1 || true
     STORY_TAPS=$((STORY_TAPS + 1))
     sleep 15
     adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || { echo "app process NOT running after story tap $N — stopping the loop"; break; }
     adb -s "$DEV" exec-out screencap -p > artifacts/screen-story-$N.png 2>/dev/null || true
     ls -la artifacts/screen-story-$N.png 2>&1 || true
-    DIFF=$(python3 /tmp/scene_diff.py "$PREV_SHOT" "artifacts/screen-story-$N.png" 2>/dev/null || echo SAME)
-    PAGE=$(python3 /tmp/story_page.py "artifacts/screen-story-$N.png" 2>/dev/null || echo STORY)
+    DIFF=$(python3 /tmp/scene_diff.py "$PREV_SHOT" "artifacts/screen-story-$N.png" 2>artifacts/detector-diff-story-$N.log || echo DIFF_FAIL)
+    if [ "$DIFF" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-story-$N.png (see artifacts/detector-diff-story-$N.log):"; cat artifacts/detector-diff-story-$N.log; DIFF=SAME; fi
+    PAGE=$(python3 /tmp/story_page.py "artifacts/screen-story-$N.png" 2>artifacts/detector-story-$N.log || echo DETECTOR_FAIL)
+    if [ "$PAGE" = "DETECTOR_FAIL" ]; then echo "!!! STORY DETECTOR FAILED on screen-story-$N.png — failing loudly, stopping walk 1 (see artifacts/detector-story-$N.log):"; cat artifacts/detector-story-$N.log; DETECTOR_FAILED=yes; break; fi
+    echo "detector screen-story-$N.png: $(cat artifacts/detector-story-$N.log 2>/dev/null)" | tee -a artifacts/launch.log
     echo "story tap $N: scene-diff vs previous shot = $DIFF, story-page = $PAGE" | tee -a artifacts/launch.log
     # BIG scene-diff alone NEVER ends the walk (run 43711691091: tap 1 went
     # rainy-city -> forest hunt, a normal story page). End the walk ONLY when
@@ -437,7 +569,8 @@ PYEOF
       echo "story tap $N: page left the dialogue flow (bottom strip dark) — re-checking after 15 s in case of a fade/transition" | tee -a artifacts/launch.log
       sleep 15
       adb -s "$DEV" exec-out screencap -p > artifacts/screen-story-$N-recheck.png 2>/dev/null || true
-      PAGE2=$(python3 /tmp/story_page.py "artifacts/screen-story-$N-recheck.png" 2>/dev/null || echo STORY)
+      PAGE2=$(python3 /tmp/story_page.py "artifacts/screen-story-$N-recheck.png" 2>artifacts/detector-story-$N-recheck.log || echo DETECTOR_FAIL)
+      if [ "$PAGE2" = "DETECTOR_FAIL" ]; then echo "!!! STORY DETECTOR FAILED on recheck screen-story-$N-recheck.png — failing loudly, stopping walk 1:"; cat artifacts/detector-story-$N-recheck.log; DETECTOR_FAILED=yes; break; fi
       echo "story tap $N re-check: story-page = $PAGE2" | tee -a artifacts/launch.log
       if [ "$PAGE2" = "OTHER" ]; then
         echo "confirmed: story dialogue flow left after story tap $N (decree page or home? operator verifies from the pixels)" | tee -a artifacts/launch.log
@@ -457,10 +590,17 @@ PYEOF
   adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at decree screenshot"
   adb -s "$DEV" exec-out screencap -p > artifacts/screen-decree.png 2>/dev/null || true
   ls -la artifacts/screen-decree.png 2>&1 || true
-  DECREE_DIFF=$(python3 /tmp/scene_diff.py "$PREV_SHOT" artifacts/screen-decree.png 2>/dev/null || echo SAME)
+  DECREE_DIFF=$(python3 /tmp/scene_diff.py "$PREV_SHOT" artifacts/screen-decree.png 2>artifacts/detector-diff-decree.log || echo DIFF_FAIL)
+  if [ "$DECREE_DIFF" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-decree.png (see artifacts/detector-diff-decree.log):"; cat artifacts/detector-diff-decree.log; DECREE_DIFF=SAME; fi
   echo "screen-decree.png scene-diff vs last story shot ($PREV_SHOT) = $DECREE_DIFF" | tee -a artifacts/launch.log
+  # The center tap is ONLY for the decree-scroll page (detector OTHER, no "»"
+  # button). If the walk ended still in dialogue (PAGE STORY), do NOT center-tap
+  # a dialogue page — walk 2 resumes the "»" loop instead (see below).
+  DECREE_PAGE=$(python3 /tmp/story_page.py artifacts/screen-decree.png 2>artifacts/detector-decree.log || echo DETECTOR_FAIL)
+  if [ "$DECREE_PAGE" = "DETECTOR_FAIL" ]; then echo "!!! STORY DETECTOR FAILED on screen-decree.png — failing loudly (see artifacts/detector-decree.log):"; cat artifacts/detector-decree.log; DETECTOR_FAILED=yes; fi
+  echo "detector screen-decree.png: $(cat artifacts/detector-decree.log 2>/dev/null) verdict=$DECREE_PAGE" | tee -a artifacts/launch.log
   DECREE_ADVANCED=no
-  if [ "$DECREE_DIFF" = "SAME" ]; then
+  if [ "$DECREE_PAGE" = "OTHER" ] && [ "$DECREE_DIFF" = "SAME" ]; then
     echo "decree page STABLE (no auto-advance) — tap CENTER SCREEN ONCE at $CX,$CY (360,640 on 720x1280)" | tee -a artifacts/launch.log
     adb -s "$DEV" shell input tap "$CX" "$CY" 2>&1 || true
     echo "decree center tap sent (ONE tap only)" | tee -a artifacts/launch.log
@@ -468,7 +608,8 @@ PYEOF
     adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at decree+30s"
     adb -s "$DEV" exec-out screencap -p > artifacts/screen-decree+30s.png 2>/dev/null || true
     ls -la artifacts/screen-decree+30s.png 2>&1 || true
-    DECREE_DIFF2=$(python3 /tmp/scene_diff.py artifacts/screen-decree.png artifacts/screen-decree+30s.png 2>/dev/null || echo SAME)
+    DECREE_DIFF2=$(python3 /tmp/scene_diff.py artifacts/screen-decree.png artifacts/screen-decree+30s.png 2>artifacts/detector-diff-decree30.log || echo DIFF_FAIL)
+    if [ "$DECREE_DIFF2" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-decree+30s.png:"; cat artifacts/detector-diff-decree30.log; DECREE_DIFF2=SAME; fi
     echo "screen-decree+30s.png scene-diff vs decree page = $DECREE_DIFF2" | tee -a artifacts/launch.log
     if [ "$DECREE_DIFF2" = "BIG" ]; then
       echo "decree page ADVANCED after the center tap" | tee -a artifacts/launch.log
@@ -480,7 +621,8 @@ PYEOF
       adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at decree+90s"
       adb -s "$DEV" exec-out screencap -p > artifacts/screen-decree+90s.png 2>/dev/null || true
       ls -la artifacts/screen-decree+90s.png 2>&1 || true
-      DECREE_DIFF3=$(python3 /tmp/scene_diff.py artifacts/screen-decree.png artifacts/screen-decree+90s.png 2>/dev/null || echo SAME)
+      DECREE_DIFF3=$(python3 /tmp/scene_diff.py artifacts/screen-decree.png artifacts/screen-decree+90s.png 2>artifacts/detector-diff-decree90.log || echo DIFF_FAIL)
+      if [ "$DECREE_DIFF3" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-decree+90s.png:"; cat artifacts/detector-diff-decree90.log; DECREE_DIFF3=SAME; fi
       echo "screen-decree+90s.png scene-diff vs decree page = $DECREE_DIFF3" | tee -a artifacts/launch.log
       if [ "$DECREE_DIFF3" = "BIG" ]; then
         echo "decree page ADVANCED during the extra 60s wait" | tee -a artifacts/launch.log
@@ -491,15 +633,25 @@ PYEOF
       PREV_SHOT="artifacts/screen-decree+90s.png"
     fi
   else
-    echo "screen already moved on from the last story shot — NOT a stable decree page, no center tap" | tee -a artifacts/launch.log
+    echo "no decree center tap: page is '$DECREE_PAGE' (detector) / scene-diff $DECREE_DIFF — center tap is only for a stable decree-scroll page; if still in dialogue, walk 2 resumes the '»' loop" | tee -a artifacts/launch.log
     PREV_SHOT="artifacts/screen-decree.png"
   fi
   echo "decree_advanced=$DECREE_ADVANCED" | tee -a artifacts/launch.log
-  echo "== STORY WALK 2 (RESUME PAST DECREE): the decree advanced to ANOTHER story page in run 43710283715 (Piyale), so resume the '»' loop up to 20 more taps =="
+  echo "== STORY WALK 2 (RESUME): runs WHENEVER walk 1 ends still in dialogue — NOT only when decree_advanced=yes =="
   STORY2_TAPS=0
   STORY2_ENDED=no
   STORY2_BIG=no
-  if [ "$DECREE_ADVANCED" = "yes" ]; then
+  # Fresh detector verdict on the CURRENT page decides: STORY (dialogue with a
+  # "»" button) -> resume the loop; OTHER (decree/home/other) -> no walk 2.
+  # This covers both cases: walk 1 ran out of its 40 taps mid-story, and the
+  # decree center-tap advanced to another story page (Piyale...).
+  sleep 5
+  adb -s "$DEV" exec-out screencap -p > artifacts/screen-resume-check.png 2>/dev/null || true
+  RESUME_PAGE=$(python3 /tmp/story_page.py artifacts/screen-resume-check.png 2>artifacts/detector-resume-check.log || echo DETECTOR_FAIL)
+  if [ "$RESUME_PAGE" = "DETECTOR_FAIL" ]; then echo "!!! STORY DETECTOR FAILED on screen-resume-check.png — failing loudly (see artifacts/detector-resume-check.log):"; cat artifacts/detector-resume-check.log; DETECTOR_FAILED=yes; fi
+  echo "detector screen-resume-check.png: $(cat artifacts/detector-resume-check.log 2>/dev/null) verdict=$RESUME_PAGE (walk1 taps=$STORY_TAPS story_ended=$STORY_ENDED decree_advanced=$DECREE_ADVANCED)" | tee -a artifacts/launch.log
+  PREV_SHOT="artifacts/screen-resume-check.png"
+  if [ "$RESUME_PAGE" = "STORY" ]; then
     for N in $(seq 1 20); do
       adb -s "$DEV" shell uiautomator dump /sdcard/window_dump_skip2.xml 2>&1 | tee -a artifacts/launch.log || true
       adb -s "$DEV" pull /sdcard/window_dump_skip2.xml artifacts/uiautomator-story2-$N.xml 2>&1 || true
@@ -524,8 +676,11 @@ PYEOF
       adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || { echo "app process NOT running after story2 tap $N — stopping the loop"; break; }
       adb -s "$DEV" exec-out screencap -p > artifacts/screen-story2-$N.png 2>/dev/null || true
       ls -la artifacts/screen-story2-$N.png 2>&1 || true
-      DIFF2=$(python3 /tmp/scene_diff.py "$PREV_SHOT" "artifacts/screen-story2-$N.png" 2>/dev/null || echo SAME)
-      PAGE=$(python3 /tmp/story_page.py "artifacts/screen-story2-$N.png" 2>/dev/null || echo STORY)
+      DIFF2=$(python3 /tmp/scene_diff.py "$PREV_SHOT" "artifacts/screen-story2-$N.png" 2>artifacts/detector-diff-story2-$N.log || echo DIFF_FAIL)
+      if [ "$DIFF2" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-story2-$N.png:"; cat artifacts/detector-diff-story2-$N.log; DIFF2=SAME; fi
+      PAGE=$(python3 /tmp/story_page.py "artifacts/screen-story2-$N.png" 2>artifacts/detector-story2-$N.log || echo DETECTOR_FAIL)
+      if [ "$PAGE" = "DETECTOR_FAIL" ]; then echo "!!! STORY DETECTOR FAILED on screen-story2-$N.png — failing loudly, stopping walk 2:"; cat artifacts/detector-story2-$N.log; DETECTOR_FAILED=yes; break; fi
+      echo "detector screen-story2-$N.png: $(cat artifacts/detector-story2-$N.log 2>/dev/null)" | tee -a artifacts/launch.log
       echo "story2 tap $N: scene-diff vs previous shot = $DIFF2, story-page = $PAGE" | tee -a artifacts/launch.log
       # BIG scene-diff alone NEVER ends the walk (see walk 1). End ONLY when
       # the page is no longer a story dialogue page.
@@ -533,7 +688,8 @@ PYEOF
         echo "story2 tap $N: page left the dialogue flow — re-checking after 15 s in case of a fade/transition" | tee -a artifacts/launch.log
         sleep 15
         adb -s "$DEV" exec-out screencap -p > artifacts/screen-story2-$N-recheck.png 2>/dev/null || true
-        PAGE2=$(python3 /tmp/story_page.py "artifacts/screen-story2-$N-recheck.png" 2>/dev/null || echo STORY)
+        PAGE2=$(python3 /tmp/story_page.py "artifacts/screen-story2-$N-recheck.png" 2>artifacts/detector-story2-$N-recheck.log || echo DETECTOR_FAIL)
+        if [ "$PAGE2" = "DETECTOR_FAIL" ]; then echo "!!! STORY DETECTOR FAILED on recheck screen-story2-$N-recheck.png — failing loudly, stopping walk 2:"; cat artifacts/detector-story2-$N-recheck.log; DETECTOR_FAILED=yes; break; fi
         echo "story2 tap $N re-check: story-page = $PAGE2" | tee -a artifacts/launch.log
         if [ "$PAGE2" = "OTHER" ]; then
           echo "confirmed: story dialogue flow left after story2 tap $N (home? operator verifies from the pixels)" | tee -a artifacts/launch.log
@@ -549,7 +705,7 @@ PYEOF
       fi
     done
   else
-    echo "decree page never advanced — no story walk 2 (do not keep tapping blindly)" | tee -a artifacts/launch.log
+    echo "current page is NOT story dialogue (detector verdict '$RESUME_PAGE') — no story walk 2 (do not keep tapping blindly)" | tee -a artifacts/launch.log
   fi
   echo "story walk 2 done: taps=$STORY2_TAPS story2_ended=$STORY2_ENDED story2_big=$STORY2_BIG (STORY2_BIG=yes means the page left the story dialogue flow, confirmed by re-check)" | tee -a artifacts/launch.log
   echo "== final screenshots (screen-home.png) =="
@@ -558,7 +714,8 @@ PYEOF
   adb -s "$DEV" shell dumpsys window windows 2>/dev/null | grep -i "mCurrentFocus" | head -3 || true
   adb -s "$DEV" exec-out screencap -p > artifacts/screen-home.png 2>/dev/null || true
   ls -la artifacts/screen-home.png 2>&1 || true
-  HOME_DIFF=$(python3 /tmp/scene_diff.py "$PREV_SHOT" artifacts/screen-home.png 2>/dev/null || echo SAME)
+  HOME_DIFF=$(python3 /tmp/scene_diff.py "$PREV_SHOT" artifacts/screen-home.png 2>artifacts/detector-diff-home.log || echo DIFF_FAIL)
+  if [ "$HOME_DIFF" = "DIFF_FAIL" ]; then echo "scene_diff FAILED on screen-home.png:"; cat artifacts/detector-diff-home.log; HOME_DIFF=SAME; fi
   echo "screen-home.png scene-diff vs last decree/story shot ($PREV_SHOT) = $HOME_DIFF" | tee -a artifacts/launch.log
   # home_reached must NOT follow from STORY_ENDED or DECREE_ADVANCED alone
   # (runs 43709009089 + 43710283715 false positives — a new story page is not
@@ -642,17 +799,18 @@ if [ -s artifacts/screen-reign+30s.png ] && [ -s artifacts/screen-tap+150s.png ]
 fi
 echo "login_reached (heuristic: final screenshot differs from pre-tap shot; verify visually): $LOGIN_REACHED"
 echo "reign_reached (heuristic: screen-reign+30s.png differs from screen-tap+150s.png, i.e. left character creation): $REIGN_REACHED"
-echo "story_taps: ${STORY_TAPS:-0} story_ended: ${STORY_ENDED:-no} decree_advanced: ${DECREE_ADVANCED:-no} story2_taps: ${STORY2_TAPS:-0} story2_ended: ${STORY2_ENDED:-no} story2_big: ${STORY2_BIG:-no} home_reached: ${HOME_REACHED:-no}"
+echo "story_taps: ${STORY_TAPS:-0} story_ended: ${STORY_ENDED:-no} decree_advanced: ${DECREE_ADVANCED:-no} story2_taps: ${STORY2_TAPS:-0} story2_ended: ${STORY2_ENDED:-no} story2_big: ${STORY2_BIG:-no} home_reached: ${HOME_REACHED:-no} detector_failed: ${DETECTOR_FAILED:-no}"
 echo "profile_tapped: ${PROFILE_TAPPED:-no}"
 
 {
-  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no) login_reached=$LOGIN_REACHED reign_reached=$REIGN_REACHED story_taps=${STORY_TAPS:-0} story_ended=${STORY_ENDED:-no} decree_advanced=${DECREE_ADVANCED:-no} story2_taps=${STORY2_TAPS:-0} story2_ended=${STORY2_ENDED:-no} story2_big=${STORY2_BIG:-no} home_reached=${HOME_REACHED:-no} profile_tapped=${PROFILE_TAPPED:-no} vip_visible=unknown"
+  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no) login_reached=$LOGIN_REACHED reign_reached=$REIGN_REACHED story_taps=${STORY_TAPS:-0} story_ended=${STORY_ENDED:-no} decree_advanced=${DECREE_ADVANCED:-no} story2_taps=${STORY2_TAPS:-0} story2_ended=${STORY2_ENDED:-no} story2_big=${STORY2_BIG:-no} home_reached=${HOME_REACHED:-no} profile_tapped=${PROFILE_TAPPED:-no} detector_failed=${DETECTOR_FAILED:-no} vip_visible=unknown"
   echo "login_reached is a heuristic (screen-home.png differs from screen-60s.png); confirm from the screenshots"
   echo "reign_reached is a heuristic (screen-reign+30s.png differs from screen-tap+150s.png); confirm from the screenshots"
   echo "home_reached is a heuristic (big scene change after the RESUMED story walk, or screen-home.png differs substantially from the last story shot); decree_advanced alone NEVER implies home; confirm from screen-home.png"
   echo "decree_advanced=yes means the decree-scroll page left the screen after the single center tap (screen-decree+30s.png) or during the extra 60s wait (screen-decree+90s.png); confirm from those screenshots"
   echo "overlay dismiss: screen-overlay-dismiss.png shows the state after the GOT IT tap (banner should be GONE); screen-overlay-dismiss-2.png exists only if a second tap was needed"
-  echo "story_taps counts '»' advance taps in walk 1 (+1 if a Skip button was tapped instead on the final iteration); story2_taps counts '»' taps in the resumed walk past the decree (screen-story2-N.png)"
+  echo "story_taps counts '»' advance taps in walk 1 (up to 40) (+1 if a Skip button was tapped instead on the final iteration); story2_taps counts '»' taps in the resumed walk past the decree (screen-story2-N.png, up to 20) — walk 2 runs whenever walk 1 ends still in dialogue, not only when decree_advanced=yes"
+  echo "detector_failed=yes means the stdlib pixel detector errored on the runner (see artifacts/detector-*.log) — the walk stopped at the first failed detector call instead of silently defaulting to STORY"
   echo "vip_visible=unknown: the script cannot read pixels — the operator determines VIP from screen-home.png and screen-profile.png (look for a VIP level/badge, e.g. 'VIP 16', on the home/profile screen)"
   echo "device: $(adb -s "$DEV" shell getprop ro.product.model 2>/dev/null) Android $(adb -s "$DEV" shell getprop ro.build.version.release 2>/dev/null) abi $(adb -s "$DEV" shell getprop ro.product.cpu.abi 2>/dev/null)"
   echo "apk: $APK (MOD VIP16+arm64 libs, sha256 $APK_SHA256) + $PAD1 (re-signed PAD1 split, sha256 $PAD1_SHA256) via install-multiple"
