@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Haremlik Al-Sultan MOD APK v3 + re-signed PAD1 asset pack (install-time split)
+# Haremlik Al-Sultan MOD APK v4 + re-signed PAD1 asset pack (install-time split)
 # on Redroid (arm64 Android userspace, NO KVM) — PAD1 SPLIT TEST: does
 # `adb install-multiple` (v3 base + PAD1) install, launch, and REACH THE
 # LOGIN SCREEN? v3 alone (run 43705039971) installed, Corona started, login
@@ -14,7 +14,7 @@
 # VIP patch: client-side VIP 16 (dataMod/roleMod/_vipMod/vipLogic); real premium
 # stays server-side. This run proves install-multiple + launch (no FATAL) +
 # login screen reached (subPackName error gone).
-# APK sources: GitHub release assets on tag haremlik-mod-7.804-v3 (too big for
+# APK sources: GitHub release assets on tag haremlik-mod-7.804-v4 (too big for
 # a git push), downloaded via the Releases API with GITHUB_TOKEN (repo is
 # private — the anonymous browser_download_url 404s; run 43696314975 proved that).
 # TAP-TO-START (kept from run 43707233559): run 43706400720 reached the
@@ -83,16 +83,16 @@
 # (avatar / VIP badge) visible and tappable at all.
 # NEVER tap anything labeled price/purchase/recharge/top-up/VIP purchase.
 # NO sign-in, NO account binding, NO payment info, NO age verification.
-# v3 sha256 486e97c7620b821bcf9bbfd1607d40157a14ce4c1941546c2277492a6a9dc7f5
+# v4 sha256 ce3edbf22373c92d1c1417c2c6acb8d8776149a523ceeba00cff8c9db3c63afa
 # PAD1 sha256 5061d7f48b834d09932d5040d3bfba761fa184b4fbe76cb93a3dc9c0e184816a
 # NO sign-in, NO purchase — stop at the login/home screen and report it.
 set -u
 mkdir -p artifacts
 exec > >(tee artifacts/run.log) 2>&1
 
-APK="Haremlik-v7.804-premium-v3.apk"
-APK_SHA256="486e97c7620b821bcf9bbfd1607d40157a14ce4c1941546c2277492a6a9dc7f5"
-APK_SIZE=291620338
+APK="Haremlik-v7.804-premium-v4.apk"
+APK_SHA256="ce3edbf22373c92d1c1417c2c6acb8d8776149a523ceeba00cff8c9db3c63afa"
+APK_SIZE=291689970
 PAD1="Haremlik-v7.804-PAD1-resigned.apk"
 PAD1_SHA256="5061d7f48b834d09932d5040d3bfba761fa184b4fbe76cb93a3dc9c0e184816a"
 PAD1_SIZE=1421381979
@@ -141,10 +141,10 @@ python3 - <<'PYEOF'
 import json, os, urllib.request
 tok = os.environ["GH_TOKEN"]
 req = urllib.request.Request(
-    "https://api.github.com/repos/Omar08263/oscartv-smoke-ci/releases/tags/haremlik-mod-7.804-v3",
+    "https://api.github.com/repos/Omar08263/oscartv-smoke-ci/releases/tags/haremlik-mod-7.804-v4",
     headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"})
 rel = json.load(urllib.request.urlopen(req))
-for name in ("Haremlik-v7.804-premium-v3.apk", "Haremlik-v7.804-PAD1-resigned.apk"):
+for name in ("Haremlik-v7.804-premium-v4.apk", "Haremlik-v7.804-PAD1-resigned.apk"):
     asset = next(a for a in rel["assets"] if a["name"] == name)
     print("asset id:", asset["id"], "size:", asset["size"], "name:", name)
     req = urllib.request.Request(
