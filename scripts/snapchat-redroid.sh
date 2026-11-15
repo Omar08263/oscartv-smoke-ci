@@ -15,14 +15,14 @@
 #    (NUa/DJf/DW) killed; P3 chat media-view receipts dropped.
 # APK source: GitHub release asset (194 MB, too big for a git push), downloaded
 # via the Releases API with GITHUB_TOKEN.
-# sha256 cc94c52a3e5693a4e99786e92aee45318bd03da0de99a3d8dd3f558fe0d9bf11
+# sha256 8aee606ebf02f45a27780c3de879bb05a066aab6470312e5951824205f3cfddf
 # NO sign-in, NO purchase — stop at the login screen and report it.
 set -u
 mkdir -p artifacts
 exec > >(tee artifacts/run.log) 2>&1
 
 APK="Snapchat-v13.70.0.49-clean-mod-v2.apk"
-APK_SHA256="cc94c52a3e5693a4e99786e92aee45318bd03da0de99a3d8dd3f558fe0d9bf11"
+APK_SHA256="8aee606ebf02f45a27780c3de879bb05a066aab6470312e5951824205f3cfddf"
 APK_SIZE=193977745
 PKG="com.snapchat.android"
 ACT="com.snapchat.android/com.snap.mushroom.MainActivity"
