@@ -1,0 +1,26 @@
+name: kolnovel-redroid-panel
+# Kolnovel v3 panel capture: same Redroid install+launch+logcat proof as
+# kolnovel-redroid, PLUS best-effort tap navigation to the Account screen
+# (scripts/kolnovel-redroid-panel.sh) to capture the F4 ReadingAccountPanel
+# (اشتراك سنوي / مشترك نشط) while logged out. One-off diagnostic run.
+# Triggered by pushing this file or the panel script.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-panel.yml'
+      - 'scripts/kolnovel-redroid-panel.sh'
+  workflow_dispatch:
+jobs:
+  redroid:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid panel capture (install + launch + tap nav + logcat)
+        run: bash scripts/kolnovel-redroid-panel.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-redroid-panel-artifacts
+          path: artifacts/
