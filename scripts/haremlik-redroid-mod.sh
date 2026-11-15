@@ -32,10 +32,26 @@
 # STORY-WALK (this run): starting ~30 s after the "Start your reign" tap,
 # REPEAT up to 20x: tap "»" (680,1235), wait 15 s, screenshot screen-story-N.png.
 # Stop early on a big top-of-frame scene change (new scene/home) or if a
-# "Skip" button appears (tap it ONCE instead). Then screen-home.png; if home
-# was reached, tap a profile/avatar button ONCE (uiautomator node if present,
-# else the top-left avatar area ~70,90) and screenshot screen-profile.png to
-# check for a VIP level/badge. If all 20 taps leave the story, stop and report.
+# "Skip" button appears (tap it ONCE instead). FIX (this run): PREV_SHOT is
+# updated on the breaking iteration too, so the later home comparison is
+# against the LAST story shot, not the previous one.
+# DECREE PAGE (this run): the story walk ends on the final decree-scroll page
+# ("I've decided to pass the throne to Eddy Good..."), which has NO "»"
+# button. Screenshot it as screen-decree.png; if it is stable (no
+# auto-advance), tap CENTER SCREEN (360,640) ONCE, wait 30 s, screenshot
+# screen-decree+30s.png; if still on the decree page, wait a further 60 s and
+# screenshot screen-decree+90s.png. Then screen-home.png; if home was reached,
+# tap a profile/avatar button ONCE (uiautomator node if present, else the
+# top-left avatar area ~70,90) and screenshot screen-profile.png to check for
+# a VIP level/badge. If the decree page never advances after the center tap +
+# 60 s wait, stop and report that (do not keep tapping blindly).
+# OVERLAY DISMISS (this run): right after launch, once the 15 s screenshot
+# shows the game loading, tap "GOT IT" on the Redroid "Viewing full screen"
+# system overlay (~573,376 on 720x1280; prefer uiautomator bounds when found),
+# screenshot screen-overlay-dismiss.png and confirm the banner is GONE; tap
+# once more if it is still there. The overlay covers the top ~500 px of every
+# screenshot and swallows taps there — dismissing it early is what makes the
+# top bar (avatar / VIP badge) visible and tappable at all.
 # NEVER tap anything labeled price/purchase/recharge/top-up/VIP purchase.
 # NO sign-in, NO account binding, NO payment info, NO age verification.
 # v3 sha256 486e97c7620b821bcf9bbfd1607d40157a14ce4c1941546c2277492a6a9dc7f5
@@ -182,6 +198,34 @@ if [ "$INSTALL_OK" = "1" ]; then
   adb -s "$DEV" shell dumpsys window windows 2>/dev/null | grep -i "mCurrentFocus" | head -3 || true
   adb -s "$DEV" exec-out screencap -p > artifacts/screen-15s.png 2>/dev/null || true
   ls -la artifacts/screen-15s.png 2>&1 || true
+  echo "== OVERLAY DISMISS: Redroid 'Viewing full screen / GOT IT' banner covers the top ~500px and swallows taps there — dismiss it NOW =="
+  adb -s "$DEV" shell uiautomator dump /sdcard/window_dump_overlay.xml 2>&1 | tee -a artifacts/launch.log || true
+  adb -s "$DEV" pull /sdcard/window_dump_overlay.xml artifacts/uiautomator-overlay.xml 2>&1 || true
+  GOTIT_BOUNDS=$(grep -i "GOT IT" artifacts/uiautomator-overlay.xml 2>/dev/null | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed 's/bounds="//; s/"//' || true)
+  if [ -n "$GOTIT_BOUNDS" ]; then
+    GOTIT_X=$(echo "$GOTIT_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[0])+int(a[2]))//2)")
+    GOTIT_Y=$(echo "$GOTIT_BOUNDS" | python3 -c "import sys,re; a=re.findall(r'\d+',sys.stdin.read()); print((int(a[1])+int(a[3]))//2)")
+    echo "uiautomator 'GOT IT' bounds: $GOTIT_BOUNDS -> tap $GOTIT_X,$GOTIT_Y" | tee -a artifacts/launch.log
+  else
+    GOTIT_X=573; GOTIT_Y=376
+    echo "no 'GOT IT' node in dump — tapping fallback coords $GOTIT_X,$GOTIT_Y" | tee -a artifacts/launch.log
+  fi
+  adb -s "$DEV" shell input tap "$GOTIT_X" "$GOTIT_Y" 2>&1 || true
+  echo "GOT IT tap 1 sent" | tee -a artifacts/launch.log
+  sleep 3
+  adb -s "$DEV" exec-out screencap -p > artifacts/screen-overlay-dismiss.png 2>/dev/null || true
+  ls -la artifacts/screen-overlay-dismiss.png 2>&1 || true
+  adb -s "$DEV" shell uiautomator dump /sdcard/window_dump_overlay2.xml 2>&1 | tee -a artifacts/launch.log || true
+  adb -s "$DEV" pull /sdcard/window_dump_overlay2.xml artifacts/uiautomator-overlay-2.xml 2>&1 || true
+  if grep -qi "GOT IT" artifacts/uiautomator-overlay-2.xml 2>/dev/null; then
+    echo "overlay banner STILL present after tap 1 — tapping GOT IT once more" | tee -a artifacts/launch.log
+    adb -s "$DEV" shell input tap "$GOTIT_X" "$GOTIT_Y" 2>&1 || true
+    sleep 3
+    adb -s "$DEV" exec-out screencap -p > artifacts/screen-overlay-dismiss-2.png 2>/dev/null || true
+    ls -la artifacts/screen-overlay-dismiss-2.png 2>&1 || true
+  else
+    echo "overlay banner GONE after tap 1 (no 'GOT IT' node in dump)" | tee -a artifacts/launch.log
+  fi
   echo "== wait to 60s total =="
   sleep 45
   adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running after 60s (crashed or exited)"
@@ -321,11 +365,60 @@ PYEOF
     if [ "$DIFF" = "BIG" ]; then
       echo "screen changed substantially after story tap $N — story scene left (new scene/home?)" | tee -a artifacts/launch.log
       STORY_ENDED=yes
+      # FIX: update PREV_SHOT on the breaking iteration too, so the later
+      # home comparison is against the LAST story shot (screen-story-N),
+      # not the previous one — otherwise a new story page false-positives
+      # as home (run 43709009089: home.png differed from story-18, not
+      # story-19, by only 2 of 921,600 pixels).
+      PREV_SHOT="artifacts/screen-story-$N.png"
       break
     fi
     PREV_SHOT="artifacts/screen-story-$N.png"
   done
   echo "story walk done: taps=$STORY_TAPS story_ended=$STORY_ENDED" | tee -a artifacts/launch.log
+  echo "== DECREE PAGE: screenshot the page the story walk stopped on =="
+  sleep 5
+  adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at decree screenshot"
+  adb -s "$DEV" exec-out screencap -p > artifacts/screen-decree.png 2>/dev/null || true
+  ls -la artifacts/screen-decree.png 2>&1 || true
+  DECREE_DIFF=$(python3 /tmp/scene_diff.py "$PREV_SHOT" artifacts/screen-decree.png 2>/dev/null || echo SAME)
+  echo "screen-decree.png scene-diff vs last story shot ($PREV_SHOT) = $DECREE_DIFF" | tee -a artifacts/launch.log
+  DECREE_ADVANCED=no
+  if [ "$DECREE_DIFF" = "SAME" ]; then
+    echo "decree page STABLE (no auto-advance) — tap CENTER SCREEN ONCE at $CX,$CY (360,640 on 720x1280)" | tee -a artifacts/launch.log
+    adb -s "$DEV" shell input tap "$CX" "$CY" 2>&1 || true
+    echo "decree center tap sent (ONE tap only)" | tee -a artifacts/launch.log
+    sleep 30
+    adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at decree+30s"
+    adb -s "$DEV" exec-out screencap -p > artifacts/screen-decree+30s.png 2>/dev/null || true
+    ls -la artifacts/screen-decree+30s.png 2>&1 || true
+    DECREE_DIFF2=$(python3 /tmp/scene_diff.py artifacts/screen-decree.png artifacts/screen-decree+30s.png 2>/dev/null || echo SAME)
+    echo "screen-decree+30s.png scene-diff vs decree page = $DECREE_DIFF2" | tee -a artifacts/launch.log
+    if [ "$DECREE_DIFF2" = "BIG" ]; then
+      echo "decree page ADVANCED after the center tap" | tee -a artifacts/launch.log
+      DECREE_ADVANCED=yes
+      PREV_SHOT="artifacts/screen-decree+30s.png"
+    else
+      echo "still on the decree page after the center tap — waiting a further 60s (it may auto-advance)" | tee -a artifacts/launch.log
+      sleep 60
+      adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at decree+90s"
+      adb -s "$DEV" exec-out screencap -p > artifacts/screen-decree+90s.png 2>/dev/null || true
+      ls -la artifacts/screen-decree+90s.png 2>&1 || true
+      DECREE_DIFF3=$(python3 /tmp/scene_diff.py artifacts/screen-decree.png artifacts/screen-decree+90s.png 2>/dev/null || echo SAME)
+      echo "screen-decree+90s.png scene-diff vs decree page = $DECREE_DIFF3" | tee -a artifacts/launch.log
+      if [ "$DECREE_DIFF3" = "BIG" ]; then
+        echo "decree page ADVANCED during the extra 60s wait" | tee -a artifacts/launch.log
+        DECREE_ADVANCED=yes
+      else
+        echo "decree page NEVER advanced (center tap + 60s wait) — stopping here, no further blind taps" | tee -a artifacts/launch.log
+      fi
+      PREV_SHOT="artifacts/screen-decree+90s.png"
+    fi
+  else
+    echo "screen already moved on from the last story shot — NOT a stable decree page, no center tap" | tee -a artifacts/launch.log
+    PREV_SHOT="artifacts/screen-decree.png"
+  fi
+  echo "decree_advanced=$DECREE_ADVANCED" | tee -a artifacts/launch.log
   echo "== final screenshots (screen-home.png) =="
   sleep 5
   adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at final screenshot"
@@ -333,11 +426,15 @@ PYEOF
   adb -s "$DEV" exec-out screencap -p > artifacts/screen-home.png 2>/dev/null || true
   ls -la artifacts/screen-home.png 2>&1 || true
   HOME_DIFF=$(python3 /tmp/scene_diff.py "$PREV_SHOT" artifacts/screen-home.png 2>/dev/null || echo SAME)
-  echo "screen-home.png scene-diff vs last story shot = $HOME_DIFF" | tee -a artifacts/launch.log
-  if [ "$STORY_ENDED" = "yes" ] || [ "$HOME_DIFF" = "BIG" ]; then
+  echo "screen-home.png scene-diff vs last decree/story shot ($PREV_SHOT) = $HOME_DIFF" | tee -a artifacts/launch.log
+  # FIX: home_reached must NOT follow from STORY_ENDED alone (that was the
+  # run 43709009089 false positive — a new story page is not home). It
+  # follows only from the decree page actually advancing, or the final
+  # screenshot differing substantially from the last decree/story shot.
+  if [ "$DECREE_ADVANCED" = "yes" ] || [ "$HOME_DIFF" = "BIG" ]; then
     HOME_REACHED=yes
   fi
-  echo "home_reached (heuristic: big scene change after the story walk; verify visually from screen-home.png): $HOME_REACHED" | tee -a artifacts/launch.log
+  echo "home_reached (heuristic: decree page advanced OR big scene change vs last decree/story shot; verify visually from screen-home.png): $HOME_REACHED" | tee -a artifacts/launch.log
   # PROFILE CHECK — only if home was reached. Prefer a uiautomator
   # profile/avatar node; else tap the top-left avatar area ONCE
   # (~70,90 on 720x1280). Never tap price/purchase/recharge/top-up/VIP nodes.
@@ -410,14 +507,16 @@ if [ -s artifacts/screen-reign+30s.png ] && [ -s artifacts/screen-tap+150s.png ]
 fi
 echo "login_reached (heuristic: final screenshot differs from pre-tap shot; verify visually): $LOGIN_REACHED"
 echo "reign_reached (heuristic: screen-reign+30s.png differs from screen-tap+150s.png, i.e. left character creation): $REIGN_REACHED"
-echo "story_taps: ${STORY_TAPS:-0} story_ended: ${STORY_ENDED:-no} home_reached: ${HOME_REACHED:-no}"
+echo "story_taps: ${STORY_TAPS:-0} story_ended: ${STORY_ENDED:-no} decree_advanced: ${DECREE_ADVANCED:-no} home_reached: ${HOME_REACHED:-no}"
 echo "profile_tapped: ${PROFILE_TAPPED:-no}"
 
 {
-  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no) login_reached=$LOGIN_REACHED reign_reached=$REIGN_REACHED story_taps=${STORY_TAPS:-0} story_ended=${STORY_ENDED:-no} home_reached=${HOME_REACHED:-no} profile_tapped=${PROFILE_TAPPED:-no} vip_visible=unknown"
+  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no) login_reached=$LOGIN_REACHED reign_reached=$REIGN_REACHED story_taps=${STORY_TAPS:-0} story_ended=${STORY_ENDED:-no} decree_advanced=${DECREE_ADVANCED:-no} home_reached=${HOME_REACHED:-no} profile_tapped=${PROFILE_TAPPED:-no} vip_visible=unknown"
   echo "login_reached is a heuristic (screen-home.png differs from screen-60s.png); confirm from the screenshots"
   echo "reign_reached is a heuristic (screen-reign+30s.png differs from screen-tap+150s.png); confirm from the screenshots"
-  echo "home_reached is a heuristic (big top-of-frame scene change after the story walk); confirm from screen-home.png"
+  echo "home_reached is a heuristic (decree page advanced after the center tap, or screen-home.png differs substantially from the last decree/story shot); confirm from screen-home.png"
+  echo "decree_advanced=yes means the decree-scroll page left the screen after the single center tap (screen-decree+30s.png) or during the extra 60s wait (screen-decree+90s.png); confirm from those screenshots"
+  echo "overlay dismiss: screen-overlay-dismiss.png shows the state after the GOT IT tap (banner should be GONE); screen-overlay-dismiss-2.png exists only if a second tap was needed"
   echo "story_taps counts '»' advance taps (+1 if a Skip button was tapped instead on the final iteration)"
   echo "vip_visible=unknown: the script cannot read pixels — the operator determines VIP from screen-home.png and screen-profile.png (look for a VIP level/badge, e.g. 'VIP 16', on the home/profile screen)"
   echo "device: $(adb -s "$DEV" shell getprop ro.product.model 2>/dev/null) Android $(adb -s "$DEV" shell getprop ro.build.version.release 2>/dev/null) abi $(adb -s "$DEV" shell getprop ro.product.cpu.abi 2>/dev/null)"
