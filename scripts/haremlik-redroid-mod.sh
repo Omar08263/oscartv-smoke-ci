@@ -17,6 +17,10 @@
 # APK sources: GitHub release assets on tag haremlik-mod-7.804-v3 (too big for
 # a git push), downloaded via the Releases API with GITHUB_TOKEN (repo is
 # private — the anonymous browser_download_url 404s; run 43696314975 proved that).
+# TAP-TO-START (this run): run 43706400720 reached the "Tap to start" screen
+# at 60 s; this run waits to 75 s, taps center-screen (tap 2 at lower-center
+# only if the screen is unchanged 15 s after tap 1), then screenshots at
+# +30/+90/+150 s after the tap to catch the login screen. NO sign-in.
 # v3 sha256 486e97c7620b821bcf9bbfd1607d40157a14ce4c1941546c2277492a6a9dc7f5
 # PAD1 sha256 5061d7f48b834d09932d5040d3bfba761fa184b4fbe76cb93a3dc9c0e184816a
 # NO sign-in, NO purchase — stop at the login/home screen and report it.
@@ -168,6 +172,44 @@ if [ "$INSTALL_OK" = "1" ]; then
   adb -s "$DEV" shell dumpsys activity activities 2>/dev/null | grep -i -A2 "hwsj\|angry" | head -20 || true
   adb -s "$DEV" exec-out screencap -p > artifacts/screen-60s.png 2>/dev/null || true
   ls -la artifacts/screen-60s.png 2>&1 || true
+  echo "== TAP-TO-START: wait to 75s, tap center, screenshots at +30/+90/+150s =="
+  sleep 15
+  adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at 75s"
+  SIZE=$(adb -s "$DEV" shell wm size 2>/dev/null | tr -d '\r')
+  echo "display size: $SIZE" | tee -a artifacts/launch.log
+  W=$(echo "$SIZE" | grep -o '[0-9]*x[0-9]*' | cut -dx -f1)
+  H=$(echo "$SIZE" | grep -o '[0-9]*x[0-9]*' | cut -dx -f2)
+  CX=$((W / 2)); CY=$((H / 2))
+  LX=$((W / 2)); LY=$((H * 3 / 4))
+  echo "tap 1: center $CX,$CY (display ${W}x${H})" | tee -a artifacts/launch.log
+  adb -s "$DEV" shell input tap "$CX" "$CY" 2>&1 || true
+  echo "tap 1 sent at ~75s after launch"
+  sleep 15
+  adb -s "$DEV" exec-out screencap -p > artifacts/screen-tap+15s.png 2>/dev/null || true
+  adb -s "$DEV" shell dumpsys window windows 2>/dev/null | grep -i "mCurrentFocus" | head -3 || true
+  # Did the screen change after tap 1? Compare with the pre-tap 60s shot.
+  if cmp -s artifacts/screen-60s.png artifacts/screen-tap+15s.png; then
+    echo "screen UNCHANGED 15s after tap 1 — tap 2 at lower-center $LX,$LY" | tee -a artifacts/launch.log
+    adb -s "$DEV" shell input tap "$LX" "$LY" 2>&1 || true
+    echo "tap 2 sent" | tee -a artifacts/launch.log
+  else
+    echo "screen CHANGED after tap 1 — no second tap" | tee -a artifacts/launch.log
+  fi
+  echo "== post-tap screenshots at +30s / +90s / +150s after tap 1 =="
+  sleep 15
+  adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at tap+30s"
+  adb -s "$DEV" shell dumpsys window windows 2>/dev/null | grep -i "mCurrentFocus" | head -3 || true
+  adb -s "$DEV" exec-out screencap -p > artifacts/screen-tap+30s.png 2>/dev/null || true
+  ls -la artifacts/screen-tap+30s.png 2>&1 || true
+  sleep 60
+  adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at tap+90s"
+  adb -s "$DEV" exec-out screencap -p > artifacts/screen-tap+90s.png 2>/dev/null || true
+  ls -la artifacts/screen-tap+90s.png 2>&1 || true
+  sleep 60
+  adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at tap+150s"
+  adb -s "$DEV" shell dumpsys window windows 2>/dev/null | grep -i "mCurrentFocus" | head -3 || true
+  adb -s "$DEV" exec-out screencap -p > artifacts/screen-tap+150s.png 2>/dev/null || true
+  ls -la artifacts/screen-tap+150s.png 2>&1 || true
 fi
 
 echo "== capture logcat =="
@@ -197,8 +239,16 @@ else
   echo "no native-lib/split error lines in logcat"
 fi
 
+echo "== login-reached heuristic (final post-tap screenshot vs pre-tap 60s shot) =="
+LOGIN_REACHED=no
+if [ -s artifacts/screen-tap+150s.png ] && [ -s artifacts/screen-60s.png ]; then
+  if ! cmp -s artifacts/screen-60s.png artifacts/screen-tap+150s.png; then LOGIN_REACHED=yes; fi
+fi
+echo "login_reached (heuristic: final screenshot differs from pre-tap shot; verify visually): $LOGIN_REACHED"
+
 {
-  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no)"
+  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no) login_reached=$LOGIN_REACHED"
+  echo "login_reached is a heuristic (screen-tap+150s.png differs from screen-60s.png); confirm from the screenshots"
   echo "device: $(adb -s "$DEV" shell getprop ro.product.model 2>/dev/null) Android $(adb -s "$DEV" shell getprop ro.build.version.release 2>/dev/null) abi $(adb -s "$DEV" shell getprop ro.product.cpu.abi 2>/dev/null)"
   echo "apk: $APK (MOD VIP16+arm64 libs, sha256 $APK_SHA256) + $PAD1 (re-signed PAD1 split, sha256 $PAD1_SHA256) via install-multiple"
 } | tee artifacts/RESULT.md
