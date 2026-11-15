@@ -12,12 +12,15 @@
 #   arm64 image executes natively on the ARM host: real arm64 .so loading,
 #   real Hermes/SoLoader init — the closest CI approximation of Omar's phone.
 # App: com.benabdellah.KolNovelApp v83/5.2.5, MainActivity
-# .MainActivity, sha256 e69133fa1c83889126d6fbf1a5b0a74d68c808e1e2fa076579a3d29be7f41a4.
+# .MainActivity, v2 sha256 0e44fc0bed4de0404b931f40de59cf8d390b33454d1de7ea9d3bf135ae9255dd.
+# v2 fixes the crash v1 died on: 73 apktool-lost @null drawable refs restored
+# (abc_switch_thumb_material + abc_btn_check_material + 71 more), incl. the
+# splash icon (D1). All 7 Hermes premium patches + LVL no-ops unchanged.
 set -u
 mkdir -p artifacts
 exec > >(tee artifacts/run.log) 2>&1
 
-APK="app/Kolnovel-v5.2.5-premium.apk"
+APK="app/Kolnovel-v5.2.5-premium-v2.apk"
 PKG="com.benabdellah.KolNovelApp"
 ACT="com.benabdellah.KolNovelApp/.MainActivity"
 DEV="localhost:5555"
