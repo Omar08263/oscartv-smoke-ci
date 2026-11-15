@@ -129,6 +129,68 @@ for el in tree.iter("node"):
 sys.exit(2)
 PYEOF
 }
+# dismiss_consent <shot-prefix> — CONSENT-DISMISS (run 43755257265 blocker):
+# a native Android dialog titled "Personalized Advertisement Statement"
+# (Cancel / Agree) appears over "Tap to start" during loading, already present
+# at 60s, and swallows every tap. uiautomator should expose the "Agree" node
+# (reuse node_center); fallback tap is (546,882) on the 720x1280 display.
+# Sets global CONSENT_DISMISSED: yes (dismissed, dialog gone on re-check),
+# no (still present after two taps), not-present (no dialog in the dump).
+# If the dialog is absent, records not-present (or keeps an earlier yes) and
+# continues normally — never fails the run.
+dismiss_consent() {
+  local prefix="$1"
+  local dump="artifacts/uiautomator-consent-$prefix.xml"
+  local dump2="artifacts/uiautomator-consent-$prefix-2.xml"
+  local dump3="artifacts/uiautomator-consent-$prefix-3.xml"
+  adb -s "$DEV" shell uiautomator dump /sdcard/window_dump_consent.xml 2>&1 | tee -a artifacts/launch.log || true
+  adb -s "$DEV" pull /sdcard/window_dump_consent.xml "$dump" 2>&1 || true
+  if [ ! -s "$dump" ] || ! grep -qi -E "Agree|Personalized Advertisement" "$dump" 2>/dev/null; then
+    echo "consent dialog NOT present in uiautomator dump ($prefix) — continuing normally" | tee -a artifacts/launch.log
+    if [ "$CONSENT_DISMISSED" != "yes" ] && [ "$CONSENT_DISMISSED" != "no" ]; then
+      CONSENT_DISMISSED=not-present
+    fi
+    return 0
+  fi
+  echo "consent dialog PRESENT ($prefix) — dismissing via 'Agree' node" | tee -a artifacts/launch.log
+  local center=""
+  center=$(node_center "$dump" "Agree" 2>/dev/null || true)
+  local tx=546 ty=882
+  if [ -n "$center" ]; then
+    tx=$(echo "$center" | cut -d' ' -f1)
+    ty=$(echo "$center" | cut -d' ' -f2)
+    echo "uiautomator 'Agree' node center: tap $tx,$ty" | tee -a artifacts/launch.log
+  else
+    echo "no 'Agree' node parsed — tapping fallback coords $tx,$ty" | tee -a artifacts/launch.log
+  fi
+  adb -s "$DEV" shell input tap "$tx" "$ty" 2>&1 || true
+  sleep 5
+  adb -s "$DEV" exec-out screencap -p > "artifacts/screen-$prefix.png" 2>/dev/null || true
+  ls -la "artifacts/screen-$prefix.png" 2>&1 || true
+  adb -s "$DEV" shell uiautomator dump /sdcard/window_dump_consent2.xml 2>&1 | tee -a artifacts/launch.log || true
+  adb -s "$DEV" pull /sdcard/window_dump_consent2.xml "$dump2" 2>&1 || true
+  if [ -s "$dump2" ] && grep -qi -E "Agree|Personalized Advertisement" "$dump2" 2>/dev/null; then
+    echo "consent dialog STILL present after tap 1 ($prefix) — tapping fallback coords 546,882 once more" | tee -a artifacts/launch.log
+    adb -s "$DEV" shell input tap 546 882 2>&1 || true
+    sleep 5
+    adb -s "$DEV" exec-out screencap -p > "artifacts/screen-$prefix-2.png" 2>/dev/null || true
+    ls -la "artifacts/screen-$prefix-2.png" 2>&1 || true
+    adb -s "$DEV" shell uiautomator dump /sdcard/window_dump_consent3.xml 2>&1 | tee -a artifacts/launch.log || true
+    adb -s "$DEV" pull /sdcard/window_dump_consent3.xml "$dump3" 2>&1 || true
+    if [ -s "$dump3" ] && grep -qi -E "Agree|Personalized Advertisement" "$dump3" 2>/dev/null; then
+      echo "consent dialog STILL present after tap 2 ($prefix) — recording consent_dismissed=no" | tee -a artifacts/launch.log
+      CONSENT_DISMISSED=no
+    else
+      echo "consent dialog GONE after tap 2 ($prefix)" | tee -a artifacts/launch.log
+      CONSENT_DISMISSED=yes
+    fi
+  else
+    echo "consent dialog GONE after tap 1 ($prefix)" | tee -a artifacts/launch.log
+    CONSENT_DISMISSED=yes
+  fi
+  echo "consent_dismissed=$CONSENT_DISMISSED ($prefix)" | tee -a artifacts/launch.log
+}
+CONSENT_DISMISSED=not-present
 INSTALL_OK=0
 LOG_OK=0
 
@@ -292,6 +354,9 @@ if [ "$INSTALL_OK" = "1" ]; then
   adb -s "$DEV" shell dumpsys activity activities 2>/dev/null | grep -i -A2 "hwsj\|angry" | head -20 || true
   adb -s "$DEV" exec-out screencap -p > artifacts/screen-60s.png 2>/dev/null || true
   ls -la artifacts/screen-60s.png 2>&1 || true
+  echo "== CONSENT DISMISS: 'Personalized Advertisement Statement' dialog blocked run 43755257265 — dismiss it BEFORE tap-to-start =="
+  dismiss_consent "consent-dismiss"
+  echo "consent_dismissed=$CONSENT_DISMISSED (after 60s)" | tee -a artifacts/launch.log
   echo "== TAP-TO-START: wait to 75s, tap center, screenshots at +30/+90/+150s =="
   sleep 15
   adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at 75s"
@@ -309,6 +374,10 @@ if [ "$INSTALL_OK" = "1" ]; then
   adb -s "$DEV" shell dumpsys window windows 2>/dev/null | grep -i "mCurrentFocus" | head -3 || true
   # Did the screen change after tap 1? Compare with the pre-tap 60s shot.
   if cmp -s artifacts/screen-60s.png artifacts/screen-tap+15s.png; then
+    echo "screen UNCHANGED 15s after tap 1 — checking for the consent dialog before tap 2" | tee -a artifacts/launch.log
+    dismiss_consent "consent-dismiss-tap"
+    adb -s "$DEV" exec-out screencap -p > artifacts/screen-tap+15s.png 2>/dev/null || true
+    echo "screen-tap+15s.png re-captured after the consent check (consent_dismissed=$CONSENT_DISMISSED)" | tee -a artifacts/launch.log
     echo "screen UNCHANGED 15s after tap 1 — tap 2 at lower-center $LX,$LY" | tee -a artifacts/launch.log
     adb -s "$DEV" shell input tap "$LX" "$LY" 2>&1 || true
     echo "tap 2 sent" | tee -a artifacts/launch.log
@@ -844,6 +913,9 @@ PYEOF
       adb -s "$DEV" shell input tap "$RGOTIT_X" "$RGOTIT_Y" 2>&1 || true
       sleep 3
     fi
+    echo "== CONSENT DISMISS (relaunch): the dialog may reappear after relaunch — dismiss before the relaunch-home screenshot ==" | tee -a artifacts/launch-relaunch.log
+    dismiss_consent "consent-dismiss-relaunch"
+    echo "consent_dismissed=$CONSENT_DISMISSED (after relaunch)" | tee -a artifacts/launch-relaunch.log
     adb -s "$DEV" exec-out screencap -p > artifacts/screen-relaunch-60s.png 2>/dev/null || true
     ls -la artifacts/screen-relaunch-60s.png 2>&1 || true
     RL_DIFF=$(python3 /tmp/scene_diff.py artifacts/screen-home.png artifacts/screen-relaunch-60s.png 2>artifacts/detector-diff-relaunch.log || echo DIFF_FAIL)
@@ -925,12 +997,13 @@ echo "story_taps: ${STORY_TAPS:-0} story_ended: ${STORY_ENDED:-no} decree_advanc
 echo "profile_tapped: ${PROFILE_TAPPED:-no}"
 
 {
-  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no) login_reached=$LOGIN_REACHED reign_reached=$REIGN_REACHED story_taps=${STORY_TAPS:-0} story_ended=${STORY_ENDED:-no} decree_advanced=${DECREE_ADVANCED:-no} story2_taps=${STORY2_TAPS:-0} story2_ended=${STORY2_ENDED:-no} story2_big=${STORY2_BIG:-no} home_reached=${HOME_REACHED:-no} profile_tapped=${PROFILE_TAPPED:-no} detector_failed=${DETECTOR_FAILED:-no} letter_dismissed=${LETTER_DISMISSED:-no} vip_tab_reached=${VIP_TAB_REACHED:-no} privilege_opened=${PRIVILEGE_OPENED:-no} relaunch_home=${RELAUNCH_HOME:-no} relaunch_vip16=unknown vip_visible=unknown"
+  echo "RESULT: install_ok=$INSTALL_OK logcat_ok=$LOG_OK fatal_found=$([ -s artifacts/fatal.txt ] && echo yes || echo no) native_lib_error=$([ -s artifacts/native-lib-lines.txt ] && echo yes || echo no) subpack_error=$([ -s artifacts/subpack-lines.txt ] && echo yes || echo no) login_reached=$LOGIN_REACHED reign_reached=$REIGN_REACHED story_taps=${STORY_TAPS:-0} story_ended=${STORY_ENDED:-no} decree_advanced=${DECREE_ADVANCED:-no} story2_taps=${STORY2_TAPS:-0} story2_ended=${STORY2_ENDED:-no} story2_big=${STORY2_BIG:-no} home_reached=${HOME_REACHED:-no} profile_tapped=${PROFILE_TAPPED:-no} detector_failed=${DETECTOR_FAILED:-no} letter_dismissed=${LETTER_DISMISSED:-no} vip_tab_reached=${VIP_TAB_REACHED:-no} privilege_opened=${PRIVILEGE_OPENED:-no} relaunch_home=${RELAUNCH_HOME:-no} relaunch_vip16=unknown vip_visible=unknown consent_dismissed=${CONSENT_DISMISSED:-not-present}"
   echo "login_reached is a heuristic (screen-home.png differs from screen-60s.png); confirm from the screenshots"
   echo "reign_reached is a heuristic (screen-reign+30s.png differs from screen-tap+150s.png); confirm from the screenshots"
   echo "home_reached is a heuristic (big scene change after the RESUMED story walk, or screen-home.png differs substantially from the last story shot); decree_advanced alone NEVER implies home; confirm from screen-home.png"
   echo "decree_advanced=yes means the decree-scroll page left the screen after the single center tap (screen-decree+30s.png) or during the extra 60s wait (screen-decree+90s.png); confirm from those screenshots"
   echo "overlay dismiss: screen-overlay-dismiss.png shows the state after the GOT IT tap (banner should be GONE); screen-overlay-dismiss-2.png exists only if a second tap was needed"
+  echo "consent_dismissed=yes means the 'Personalized Advertisement Statement' dialog was found and dismissed (screen-consent-dismiss.png / -tap / -relaunch show the state after the dismiss); not-present means no dialog appeared; no means it was still present after two taps"
   echo "story_taps counts '»' advance taps in walk 1 (up to 40) (+1 if a Skip button was tapped instead on the final iteration); story2_taps counts '»' taps in the resumed walk past the decree (screen-story2-N.png, up to 20) — walk 2 runs whenever walk 1 ends still in dialogue, not only when decree_advanced=yes"
   echo "detector_failed=yes means the stdlib pixel detector errored on the runner (see artifacts/detector-*.log) — the walk stopped at the first failed detector call instead of silently defaulting to STORY"
   echo "vip_visible=unknown: the script cannot read pixels — the operator determines VIP from screen-home.png and screen-profile.png (look for a VIP level/badge, e.g. 'VIP 16', on the home/profile screen)"
