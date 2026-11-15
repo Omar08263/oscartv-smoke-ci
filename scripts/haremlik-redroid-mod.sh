@@ -1,26 +1,30 @@
 #!/usr/bin/env bash
-# Haremlik Al-Sultan MOD APK (VIP16 client patch + CoronaCards arm64 libs) on Redroid (arm64 Android
-# userspace, NO KVM) — MOD proof test: does the single-APK mod install and launch?
+# Haremlik Al-Sultan MOD APK v2 (VIP16 client patch + 33 REAL split arm64 libs incl.
+# libclthkasc.so) on Redroid (arm64 Android userspace, NO KVM) — MOD proof test:
+# does the single-APK mod install and launch? v1 crashed at startup with
+# UnsatisfiedLinkError libclthkasc.so not found (run 43699371020); v2 adds the
+# real config.arm64_v8a split libs (md5-verified) — this run must prove the
+# crash is gone and the login screen is reached.
 # App: com.dc.hwsj v66780401/7.804 MOD, launcher com.dc.angry.gen.StartupActivity,
 # Solar2D (Corona) 3718.4701, label "Game of Sultans".
-# Split fix: manifest split requirements removed; 10 Solar2D 3718 arm64 .so
-# (libcorona/liblua/libopenal/libmpg123/libalmixer/libjnlua5.1 + 4 plugin stubs)
-# from CoronaCards-Android-2025.3718 bundled in lib/arm64-v8a/ (STORED).
+# Split fix: manifest split requirements removed; 33 REAL arm64 .so from the
+# 7.804 config.arm64_v8a split (incl. libclthkasc.so KSecure + APM Insight libs)
+# bundled in lib/arm64-v8a/ (STORED), replacing the 10 CoronaCards stubs of v1.
 # VIP patch: client-side VIP 16 (dataMod/roleMod/_vipMod/vipLogic); real premium
 # stays server-side. This run proves install (no MISSING_SPLIT) + launch
 # (no UnsatisfiedLinkError, no FATAL) + login/home screen reached.
-# APK source: GitHub release asset (277 MB, too big for a git push), downloaded
+# APK source: GitHub release asset (292 MB, too big for a git push), downloaded
 # via the Releases API with GITHUB_TOKEN (repo is private — the anonymous
 # browser_download_url 404s; run 43696314975 proved that).
-# sha256 4f7161ea125bc7f79d53e73c3ab7b322225a48557087d4bfa13afb6f33642669
+# v2 sha256 7f6e3cc9eddaf376c3d0e9292543fdd749890c052cbd7bf01778bb4d22fe0cb6
 # NO sign-in, NO purchase — stop at the login/home screen and report it.
 set -u
 mkdir -p artifacts
 exec > >(tee artifacts/run.log) 2>&1
 
-APK="Haremlik-v7.804-premium.apk"
-APK_SHA256="4f7161ea125bc7f79d53e73c3ab7b322225a48557087d4bfa13afb6f33642669"
-APK_SIZE=276991969
+APK="Haremlik-v7.804-premium-v2.apk"
+APK_SHA256="7f6e3cc9eddaf376c3d0e9292543fdd749890c052cbd7bf01778bb4d22fe0cb6"
+APK_SIZE=291689970
 PKG="com.dc.hwsj"
 ACT="com.dc.hwsj/com.dc.angry.gen.StartupActivity"
 DEV="localhost:5555"
@@ -44,21 +48,21 @@ python3 - <<'PYEOF'
 import json, os, urllib.request
 tok = os.environ["GH_TOKEN"]
 req = urllib.request.Request(
-    "https://api.github.com/repos/Omar08263/oscartv-smoke-ci/releases/tags/haremlik-mod-7.804",
+    "https://api.github.com/repos/Omar08263/oscartv-smoke-ci/releases/tags/haremlik-mod-7.804-v2",
     headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"})
 rel = json.load(urllib.request.urlopen(req))
-asset = next(a for a in rel["assets"] if a["name"] == "Haremlik-v7.804-premium.apk")
+asset = next(a for a in rel["assets"] if a["name"] == "Haremlik-v7.804-premium-v2.apk")
 print("asset id:", asset["id"], "size:", asset["size"])
 req = urllib.request.Request(
     f"https://api.github.com/repos/Omar08263/oscartv-smoke-ci/releases/assets/{asset['id']}",
     headers={"Authorization": f"Bearer {tok}", "Accept": "application/octet-stream"})
-with urllib.request.urlopen(req) as r, open("Haremlik-v7.804-premium.apk", "wb") as f:
+with urllib.request.urlopen(req) as r, open("Haremlik-v7.804-premium-v2.apk", "wb") as f:
     while True:
         chunk = r.read(1 << 20)
         if not chunk:
             break
         f.write(chunk)
-print("downloaded bytes:", os.path.getsize("Haremlik-v7.804-premium.apk"))
+print("downloaded bytes:", os.path.getsize("Haremlik-v7.804-premium-v2.apk"))
 PYEOF
 ls -la "$APK" 2>&1
 ACTUAL_SIZE=$(stat -c%s "$APK" 2>/dev/null || echo 0)
