@@ -30,12 +30,12 @@ on:
       frida_script:
         description: 'Frida script in the repo to attach (e.g. scripts/frida/haremlik-dynrea-baseline.js)'
         required: false
-        default: 'scripts/frida/haremlik-dynrea-baseline.js'
+        default: 'scripts/frida/haremlik-dynrea-wireforge.js'
         type: string
       soak_seconds:
         description: 'Seconds to hold at home with Frida attached after the story walk'
         required: false
-        default: '90'
+        default: '1500'
         type: string
 jobs:
   dynrea:
