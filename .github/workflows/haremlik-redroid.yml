@@ -1,0 +1,32 @@
+name: haremlik-redroid
+# Haremlik Al-Sultan (Game of Sultans) ORIGINAL APK on REAL arm64 Android
+# userspace (Redroid) — runtime BASELINE, run in parallel with the mod build.
+# Runner: GitHub-hosted ubuntu-24.04-arm (native ARM64 host). Redroid's arm64
+# image runs arm64 .so files natively, no KVM needed (proven path: kolnovel).
+# Critical question: base APK has ZERO native .so files; manifest declares
+# splits.required=true, requiredSplitTypes="base__abi,base__density" — the
+# Solar2D runtime (libcorona.so) lives in the ABI split, absent from the file.
+# This run answers empirically: install OK? launch OK? or
+# INSTALL_FAILED_MISSING_SPLIT / UnsatisfiedLinkError?
+# APK (262 MB) is fetched from a GitHub release asset, NOT pushed to git.
+# NO sign-in, NO purchase — stop at the login/home screen.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/haremlik-redroid.yml'
+      - 'scripts/haremlik-redroid.sh'
+  workflow_dispatch:
+jobs:
+  redroid:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid smoke test — Haremlik ORIGINAL (install + launch + logcat)
+        run: bash scripts/haremlik-redroid.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: haremlik-redroid-artifacts
+          path: artifacts/
