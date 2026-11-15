@@ -102,9 +102,9 @@ set -u
 mkdir -p artifacts
 exec > >(tee artifacts/run.log) 2>&1
 
-APK="Haremlik-v7.804-instrumented-dynrea3.apk"
-APK_SHA256="3560aa50605ef634c8a6b6f3c4f5f6c3783679e291364b5b0b0b4006e524128d"
-APK_SIZE=291931833
+APK="Haremlik-v7.804-premium-v4.apk"
+APK_SHA256="ce3edbf22373c92d1c1417c2c6acb8d8776149a523ceeba00cff8c9db3c63afa"
+APK_SIZE=291689970
 PAD1="Haremlik-v7.804-PAD1-resigned.apk"
 PAD1_SHA256="5061d7f48b834d09932d5040d3bfba761fa184b4fbe76cb93a3dc9c0e184816a"
 PAD1_SIZE=1421381979
@@ -314,7 +314,7 @@ req = urllib.request.Request(
     "https://api.github.com/repos/Omar08263/oscartv-smoke-ci/releases/tags/haremlik-mod-7.804-v4",
     headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"})
 rel = json.load(urllib.request.urlopen(req))
-for name in ("Haremlik-v7.804-instrumented-dynrea3.apk", "Haremlik-v7.804-PAD1-resigned.apk"):
+for name in ("Haremlik-v7.804-premium-v4.apk", "Haremlik-v7.804-PAD1-resigned.apk"):
     asset = next(a for a in rel["assets"] if a["name"] == name)
     print("asset id:", asset["id"], "size:", asset["size"], "name:", name)
     req = urllib.request.Request(
