@@ -1,0 +1,24 @@
+name: fetch-play-splits
+# Fetch Game of Sultans 7.804 base + splits from Google Play via goopdl
+# (anonymous Aurora dispenser auth). The dispenser is Cloudflare-blocked
+# from our VM, so this runs on the runner. Run via push (PAT cannot dispatch).
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fetch-play-splits.yml'
+      - 'scripts/fetch-play-splits.sh'
+  workflow_dispatch:
+jobs:
+  fetch:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch Play splits via goopdl
+        run: bash scripts/fetch-play-splits.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: haremlik-play-splits
+          path: artifacts/
