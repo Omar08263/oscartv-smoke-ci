@@ -60,9 +60,20 @@ if best is None:
     sys.exit(1)
 print(f"{best[2]} {best[3]}")
 PYEOF
-dump_ui() { # $1 = out name
-  adb -s "$DEV" shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1
-  adb -s "$DEV" pull /sdcard/ui.xml "artifacts/$1" >/dev/null 2>&1 || echo "ui dump $1 FAILED"
+dump_ui() { # $1 = out name; retries until the dump is non-empty (uiautomator
+  # can return an empty file while the window is still settling)
+  local i
+  for i in 1 2 3; do
+    adb -s "$DEV" shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1
+    adb -s "$DEV" pull /sdcard/ui.xml "artifacts/$1" >/dev/null 2>&1
+    if [ -s "artifacts/$1" ] && grep -q "<hierarchy" "artifacts/$1" 2>/dev/null; then
+      echo "ui dump $1 OK (try $i)"
+      return 0
+    fi
+    echo "ui dump $1 empty/bad, retry $i"
+    sleep 3
+  done
+  echo "ui dump $1 FAILED after retries"
   ls -la "artifacts/$1" 2>&1 || true
 }
 tap_text() { # $1 = xml file, $2.. = texts to try (first match wins)
@@ -162,22 +173,29 @@ if [ "$INSTALL_OK" = "1" ]; then
 fi
 
 echo "== panel navigation: consent first, then skip onboarding -> Settings -> Account =="
-# ORDER MATTERS (learned from run 43676859007): the UMP consent dialog is up
-# at 60s and blocks the onboarding skip — dismiss it FIRST, then skip.
-# Every tap reads a FRESH dump (never a stale one), and each step verifies the
+# ORDER MATTERS (learned from runs 43676859007 / 43677339368): the UMP consent
+# dialog is up at 60s and blocks the onboarding skip — dismiss it FIRST, then
+# skip. Consent is checked on EVERY dump (a dump can come back empty while
+# the window settles). Every tap reads a FRESH dump; each step verifies the
 # screen actually changed before proceeding.
+dismiss_consent() { # $1 = dump file; taps Consent if present, returns 0 if tapped
+  if grep -qi "Consent" "artifacts/$1" 2>/dev/null; then
+    echo "UMP consent dialog detected in $1, tapping Consent"
+    tap_text "$1" "Consent" || adb -s "$DEV" shell input tap 360 955
+    sleep 5
+    return 0
+  fi
+  return 1
+}
 dump_ui ui1.xml
-if grep -qi "Consent" artifacts/ui1.xml; then
-  echo "UMP consent dialog detected, tapping Consent"
-  tap_text ui1.xml "Consent" || adb -s "$DEV" shell input tap 360 955
-  sleep 5
-  shoot screen-after-consent.png
-fi
+if dismiss_consent ui1.xml; then shoot screen-after-consent.png; dump_ui ui1b.xml; dismiss_consent ui1b.xml || true; fi
 dump_ui ui2.xml
+dismiss_consent ui2.xml && { shoot screen-after-consent.png; dump_ui ui2b.xml; cp artifacts/ui2b.xml artifacts/ui2.xml; }
 tap_text ui2.xml "تخطي" || { echo "skip text not found, fallback tap 635 125"; adb -s "$DEV" shell input tap 635 125; }
 sleep 8
 shoot screen-after-skip.png
 dump_ui ui3.xml
+dismiss_consent ui3.xml && { dump_ui ui3b.xml; cp artifacts/ui3b.xml artifacts/ui3.xml; }
 if grep -q "تخطي" artifacts/ui3.xml; then
   echo "onboarding still present, retrying skip"
   tap_text ui3.xml "تخطي" || adb -s "$DEV" shell input tap 635 125
