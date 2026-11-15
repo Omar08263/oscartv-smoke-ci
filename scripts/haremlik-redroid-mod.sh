@@ -35,6 +35,19 @@
 # "Skip" button appears (tap it ONCE instead). FIX (this run): PREV_SHOT is
 # updated on the breaking iteration too, so the later home comparison is
 # against the LAST story shot, not the previous one.
+# RETRY (run 43711691091): walk 1 stopped after ONE tap — the scene-diff BIG
+# break misfired: tap 1 went rainy-city -> bright forest hunt (Karaman: "Now
+# the hunt truly begins, Your Highness!"), a normal story page, not home and
+# not the decree. BIG only means "new background", and backgrounds change
+# constantly in this story. The walk now NEVER breaks on scene-diff BIG.
+# Instead it uses a pixel story-page detector: a normal story dialogue page
+# has a light parchment text box at the bottom (bottom-strip mean luminance
+# ~196-205, measured firsthand on reign+30s / story-1 / home.png of run
+# 43711691091); the decree scroll page measures 26, title 33, char-creation
+# 41. The loop taps "»" up to 20x and stops early ONLY when the page is no
+# longer a story dialogue page (bottom strip dark, confirmed by a second
+# screenshot 15 s later in case of a fade/transition). GOT IT fix VERIFIED in
+# run 43711691091: parsed tap (552,401), banner GONE after tap 1, no 2nd tap.
 # RESUME RUN (this run): story continues PAST the decree (run 43710283715: one
 # center tap advanced the decree to ANOTHER story page, Piyale: "All hail the
 # new Sultan!", with the "»" button back). So after the decree center-tap,
@@ -370,6 +383,25 @@ except Exception as e:
     print("diff-error: %s" % e, file=sys.stderr)
     print("SAME")
 PYEOF
+  # Story-page detector: prints STORY if the bottom strip (y 0.80-0.97h) is a
+  # light parchment dialogue box (mean luminance > 170), else OTHER. A normal
+  # story page measures ~196-205; decree scroll 26; title 33; char-creation 41.
+  # Falls back to STORY (keep tapping) if PIL is unavailable.
+  cat > /tmp/story_page.py <<'PYEOF'
+import sys
+try:
+    from PIL import Image
+    im = Image.open(sys.argv[1]).convert("L")
+    w, h = im.size
+    strip = im.crop((0, int(h * 0.80), w, int(h * 0.97)))
+    px = list(strip.getdata())
+    lum = sum(px) / len(px)
+    print("STORY" if lum > 170 else "OTHER")
+    print("bottom_lum=%.1f" % lum, file=sys.stderr)
+except Exception as e:
+    print("story-page-error: %s" % e, file=sys.stderr)
+    print("STORY")
+PYEOF
   for N in $(seq 1 20); do
     # "Skip" check FIRST: if a Skip button ever appears (uiautomator exposes
     # zero Corona nodes, so this almost certainly never fires), tap it ONCE
@@ -396,19 +428,28 @@ PYEOF
     adb -s "$DEV" exec-out screencap -p > artifacts/screen-story-$N.png 2>/dev/null || true
     ls -la artifacts/screen-story-$N.png 2>&1 || true
     DIFF=$(python3 /tmp/scene_diff.py "$PREV_SHOT" "artifacts/screen-story-$N.png" 2>/dev/null || echo SAME)
-    echo "story tap $N: scene-diff vs previous shot = $DIFF" | tee -a artifacts/launch.log
-    if [ "$DIFF" = "BIG" ]; then
-      echo "screen changed substantially after story tap $N — story scene left (new scene/home?)" | tee -a artifacts/launch.log
-      STORY_ENDED=yes
-      # FIX: update PREV_SHOT on the breaking iteration too, so the later
-      # home comparison is against the LAST story shot (screen-story-N),
-      # not the previous one — otherwise a new story page false-positives
-      # as home (run 43709009089: home.png differed from story-18, not
-      # story-19, by only 2 of 921,600 pixels).
+    PAGE=$(python3 /tmp/story_page.py "artifacts/screen-story-$N.png" 2>/dev/null || echo STORY)
+    echo "story tap $N: scene-diff vs previous shot = $DIFF, story-page = $PAGE" | tee -a artifacts/launch.log
+    # BIG scene-diff alone NEVER ends the walk (run 43711691091: tap 1 went
+    # rainy-city -> forest hunt, a normal story page). End the walk ONLY when
+    # the page is no longer a story dialogue page (parchment box gone).
+    if [ "$PAGE" = "OTHER" ]; then
+      echo "story tap $N: page left the dialogue flow (bottom strip dark) — re-checking after 15 s in case of a fade/transition" | tee -a artifacts/launch.log
+      sleep 15
+      adb -s "$DEV" exec-out screencap -p > artifacts/screen-story-$N-recheck.png 2>/dev/null || true
+      PAGE2=$(python3 /tmp/story_page.py "artifacts/screen-story-$N-recheck.png" 2>/dev/null || echo STORY)
+      echo "story tap $N re-check: story-page = $PAGE2" | tee -a artifacts/launch.log
+      if [ "$PAGE2" = "OTHER" ]; then
+        echo "confirmed: story dialogue flow left after story tap $N (decree page or home? operator verifies from the pixels)" | tee -a artifacts/launch.log
+        STORY_ENDED=yes
+        PREV_SHOT="artifacts/screen-story-$N-recheck.png"
+        break
+      fi
+      echo "re-check shows a story page again (was a transition) — resuming the walk" | tee -a artifacts/launch.log
+      PREV_SHOT="artifacts/screen-story-$N-recheck.png"
+    else
       PREV_SHOT="artifacts/screen-story-$N.png"
-      break
     fi
-    PREV_SHOT="artifacts/screen-story-$N.png"
   done
   echo "story walk done: taps=$STORY_TAPS story_ended=$STORY_ENDED" | tee -a artifacts/launch.log
   echo "== DECREE PAGE: screenshot the page the story walk stopped on =="
@@ -484,20 +525,33 @@ PYEOF
       adb -s "$DEV" exec-out screencap -p > artifacts/screen-story2-$N.png 2>/dev/null || true
       ls -la artifacts/screen-story2-$N.png 2>&1 || true
       DIFF2=$(python3 /tmp/scene_diff.py "$PREV_SHOT" "artifacts/screen-story2-$N.png" 2>/dev/null || echo SAME)
-      echo "story2 tap $N: scene-diff vs previous shot = $DIFF2" | tee -a artifacts/launch.log
-      if [ "$DIFF2" = "BIG" ]; then
-        echo "screen changed substantially after story2 tap $N — story scene left (new scene/home? operator verifies from the pixels)" | tee -a artifacts/launch.log
-        STORY2_ENDED=yes
-        STORY2_BIG=yes
+      PAGE=$(python3 /tmp/story_page.py "artifacts/screen-story2-$N.png" 2>/dev/null || echo STORY)
+      echo "story2 tap $N: scene-diff vs previous shot = $DIFF2, story-page = $PAGE" | tee -a artifacts/launch.log
+      # BIG scene-diff alone NEVER ends the walk (see walk 1). End ONLY when
+      # the page is no longer a story dialogue page.
+      if [ "$PAGE" = "OTHER" ]; then
+        echo "story2 tap $N: page left the dialogue flow — re-checking after 15 s in case of a fade/transition" | tee -a artifacts/launch.log
+        sleep 15
+        adb -s "$DEV" exec-out screencap -p > artifacts/screen-story2-$N-recheck.png 2>/dev/null || true
+        PAGE2=$(python3 /tmp/story_page.py "artifacts/screen-story2-$N-recheck.png" 2>/dev/null || echo STORY)
+        echo "story2 tap $N re-check: story-page = $PAGE2" | tee -a artifacts/launch.log
+        if [ "$PAGE2" = "OTHER" ]; then
+          echo "confirmed: story dialogue flow left after story2 tap $N (home? operator verifies from the pixels)" | tee -a artifacts/launch.log
+          STORY2_ENDED=yes
+          STORY2_BIG=yes
+          PREV_SHOT="artifacts/screen-story2-$N-recheck.png"
+          break
+        fi
+        echo "re-check shows a story page again (was a transition) — resuming walk 2" | tee -a artifacts/launch.log
+        PREV_SHOT="artifacts/screen-story2-$N-recheck.png"
+      else
         PREV_SHOT="artifacts/screen-story2-$N.png"
-        break
       fi
-      PREV_SHOT="artifacts/screen-story2-$N.png"
     done
   else
     echo "decree page never advanced — no story walk 2 (do not keep tapping blindly)" | tee -a artifacts/launch.log
   fi
-  echo "story walk 2 done: taps=$STORY2_TAPS story2_ended=$STORY2_ENDED story2_big=$STORY2_BIG" | tee -a artifacts/launch.log
+  echo "story walk 2 done: taps=$STORY2_TAPS story2_ended=$STORY2_ENDED story2_big=$STORY2_BIG (STORY2_BIG=yes means the page left the story dialogue flow, confirmed by re-check)" | tee -a artifacts/launch.log
   echo "== final screenshots (screen-home.png) =="
   sleep 5
   adb -s "$DEV" shell pidof "$PKG" 2>&1 | tee -a artifacts/launch.log || echo "app process NOT running at final screenshot"
