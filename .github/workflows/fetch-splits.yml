@@ -5,6 +5,11 @@ name: fetch-splits
 # CoronaCards libs cannot supply it. Extract the split, verify md5s, upload.
 # Run manually: Actions -> fetch-splits -> Run workflow.
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fetch-splits.yml'
+      - 'scripts/fetch-splits.sh'
   workflow_dispatch:
 jobs:
   fetch:
