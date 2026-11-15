@@ -29,15 +29,20 @@ Run: mitmdump -s /addon.py --set block_global=false
 import json
 import os
 
-LOG_PATH = os.environ.get("MITM_LOG", "/mitm/mitm-log.jsonl")
+from mitmproxy import ctx
+
+LOG_PATH = os.environ.get("MITM_LOG", "/tmp/mitm-log.jsonl")
 
 
 def _log(obj):
     try:
         with open(LOG_PATH, "a") as f:
             f.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    except Exception as e:
+        try:
+            ctx.log.warn(f"mitm-addon: cannot write {LOG_PATH}: {e}")
+        except Exception:
+            pass
 
 
 def _trunc_auth(value):
@@ -91,6 +96,10 @@ def response(flow):
                 flow.response.headers["Content-Length"] = str(len(flow.response.content))
                 entry["flipped"] = True
                 entry["flip"] = "has_access true->false, is_locked false->true, content blanked"
+                try:
+                    ctx.log.info(f"mitm-addon: FLIPPED /reader {path} has_access true->false")
+                except Exception:
+                    pass
             else:
                 entry["flipped"] = False
         except Exception as e:

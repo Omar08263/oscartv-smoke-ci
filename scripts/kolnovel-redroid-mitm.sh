@@ -125,8 +125,7 @@ docker rm -f mitm >/dev/null 2>&1 || true
 # shellcheck disable=SC2086
 docker run -d --name mitm -p 8080:8080 \
   -v "$PWD/scripts/kolnovel-mitm-addon.py:/addon.py:ro" \
-  -v "$PWD/mitm:/mitm" \
-  -e MITM_LOG=/mitm/mitm-log.jsonl \
+  -e MITM_LOG=/tmp/mitm-log.jsonl \
   mitmproxy/mitmproxy:11 mitmdump -s /addon.py --set block_global=false 2>&1
 sleep 8
 docker ps --filter name=mitm --format '{{.Status}} {{.Image}}' 2>&1
@@ -289,16 +288,24 @@ else
   echo "NOT ON DISCOVER (ui4) — aborting nav"
   cp artifacts/ui4.xml artifacts/ui5.xml
 fi
-# Novel detail -> first chapter: chapter rows usually show the chapter
-# title/number; try common texts, else tap the first row (y~450).
-if grep -qi "فصل\|الفصول\|chapter" artifacts/ui5.xml; then
-  tap_text ui5.xml "الفصل 1" "1" || { echo "chapter text tap failed, tapping first row y~450"; adb -s "$DEV" shell input tap 360 450; }
+# Novel detail -> Content tab (المحتوى) -> first chapter row.
+# The detail screen has tabs: التعليقات / المحتوى (380) / المراجعات.
+# The chapter list lives under المحتوى; tap it, then tap the first
+# chapter row (centre of the list area).
+if grep -q "المحتوى" artifacts/ui5.xml; then
+  tap_text ui5.xml "المحتوى" || echo "content tab tap failed"
+  sleep 8
+  shoot screen-content.png
+  dump_ui ui5b.xml
+  dismiss_consent ui5b.xml && { dump_ui ui5c.xml; cp artifacts/ui5c.xml artifacts/ui5b.xml; }
+  echo "tapping first chapter row (centre of list, y~600)"
+  adb -s "$DEV" shell input tap 360 600
   sleep 10
   shoot screen-reader.png
   dump_ui ui6.xml
 else
-  echo "NO chapter list visible in ui5 — trying a row tap anyway"
-  adb -s "$DEV" shell input tap 360 450
+  echo "NO content tab in ui5 — trying a row tap anyway"
+  adb -s "$DEV" shell input tap 360 600
   sleep 10
   shoot screen-reader.png
   dump_ui ui6.xml
@@ -309,8 +316,8 @@ echo "== capture logcat + mitm log =="
 adb -s "$DEV" logcat -d > artifacts/logcat.txt 2>&1 || echo "logcat -d FAILED"
 adb -s "$DEV" logcat -d -b crash > artifacts/logcat-crash.txt 2>&1 || true
 docker logs mitm > artifacts/mitm-docker.log 2>&1 || true
-cp mitm/mitm-log.jsonl artifacts/mitm-log.jsonl 2>/dev/null || echo "mitm log copy FAILED (no flows?)"
-ls -la mitm/ artifacts/mitm-log.jsonl 2>&1 || true
+docker cp mitm:/tmp/mitm-log.jsonl artifacts/mitm-log.jsonl 2>/dev/null || echo "mitm log docker-cp FAILED (no flows?)"
+ls -la artifacts/mitm-log.jsonl 2>&1 || true
 if [ -s artifacts/mitm-log.jsonl ]; then LOG_OK=1; fi
 if grep -q "/reader/" artifacts/mitm-log.jsonl 2>/dev/null; then READER_SEEN=1; echo "MITM: /reader request OBSERVED"; fi
 grep -c "kolnovel.com" artifacts/mitm-log.jsonl 2>/dev/null || echo "0 kolnovel flows logged"
