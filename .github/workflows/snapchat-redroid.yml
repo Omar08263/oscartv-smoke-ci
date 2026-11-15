@@ -1,0 +1,32 @@
+name: snapchat-redroid
+# Snapchat clean-mod v2 (13.70.0.49) on REAL arm64 Android userspace (Redroid).
+# Runner: GitHub-hosted ubuntu-24.04-arm (native ARM64 host). Redroid's arm64
+# image runs arm64 .so files natively, no KVM needed (proven path: kolnovel).
+# APK (194 MB) is fetched from a GitHub release asset, NOT pushed to git.
+# Proves: install + launch + alive 60s + NO redirect (no browser opening, no
+# exit on launch) + 0 FATAL for the app + no ads visible on screens reachable
+# without login. NO sign-in — stop at the login screen. Login-gated behaviour
+# (in-app ads behind login, Play Integrity) cannot be proven here; Omar's
+# on-device test on a THROWAWAY account is the final arbiter.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/snapchat-redroid.yml'
+      - 'scripts/snapchat-redroid.sh'
+  workflow_dispatch:
+jobs:
+  redroid:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid smoke test — Snapchat clean-mod v2 (install + launch + no-redirect + logcat)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/snapchat-redroid.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: snapchat-redroid-artifacts
+          path: artifacts/
