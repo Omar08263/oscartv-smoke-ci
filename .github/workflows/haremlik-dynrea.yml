@@ -13,6 +13,7 @@ name: haremlik-dynrea
 # JSON before encryption, dir=0 IN logs the plaintext response JSON after
 # decryption. See scripts/frida/haremlik-dynrea-baseline.js.
 #
+# ENTRY-GATE PROBE 2026-11-16: fresh baseline title-screen check under new server patch genTime 1794799279 (Omar phone) vs 1794552909 (Redroid runs).
 # APKs are fetched from the GitHub release assets on tag
 # haremlik-mod-7.804-v4 (too big for a git push), same as the v4 Redroid
 # run 43718144020. NO sign-in, NO real-money purchase, NO forged receipt.
