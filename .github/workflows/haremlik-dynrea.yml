@@ -18,6 +18,10 @@ name: haremlik-dynrea
 # run 43718144020. NO sign-in, NO real-money purchase, NO forged receipt.
 # Sibling probe agents run their own Frida scripts on this infra — see
 # work/dynrea/infra/READY.md (repo path: haremlik-mod/work/dynrea/).
+#
+# Re-push 1 (2026-11-16 ~01:02Z): first push (a9e9184) allocated no runner
+# (run 43780927620, job 133017687830, 5 s, runner null/0) — retry after
+# 30 min. Env literals below unchanged: wireforge script + 1500 s soak.
 on:
   push:
     branches: [main]
