@@ -1,0 +1,35 @@
+name: novels-space-aurora
+# فضاء الروايات (Novels Space) — fetch the missing arm64 ABI split APK via
+# Aurora Store (anonymous login, no Google account) on Redroid (real arm64
+# Android userspace, no KVM). The base APK we already hold is base-only with
+# ZERO .so files; all Dart logic (incl. the premium/VIP gate) lives in
+# libapp.so inside the missing config.arm64_v8a.apk split.
+# App: com.fadariwyat.cenele v3.0.0 versionCode 59 (developer AYDspace).
+# Mirrors (APKPure/APKCombo/APKMirror) have NO listing for this package.
+# DO NOT confuse with a DIFFERENT app also called «فضاء الروايات»:
+# package zxc.laitooo.flutter.riwayat_space v1.0.1 — NOT our app.
+# Verification gates (hard): downloaded base sha256 MUST equal
+# b8fbe051b4c88a4b0e2ffc92509820c3c93cdaa859cefa5b4a775cb939d5ac82 AND
+# versionCode 59; the arm64 split MUST contain lib/arm64-v8a/libapp.so.
+# If either gate fails, the run FAILS and reports — no wrong file is passed on.
+# No mod is built here, no account created, nothing bought.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/novels-space-aurora.yml'
+      - 'scripts/novels-space-aurora.sh'
+  workflow_dispatch:
+jobs:
+  redroid:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Aurora Store fetch — Novels Space arm64 split on Redroid
+        run: bash scripts/novels-space-aurora.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: novels-space-aurora-artifacts
+          path: artifacts/
