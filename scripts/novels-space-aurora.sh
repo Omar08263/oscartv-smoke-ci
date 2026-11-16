@@ -279,7 +279,14 @@ for step in $(seq 1 25); do
   if tap_text "continue"; then sleep 4; continue; fi
   if tap_text "next"; then sleep 3; continue; fi
   if tap_text "skip"; then sleep 3; continue; fi
-  if tap_text "allow"; then sleep 3; continue; fi
+  # "Finish" exits the permissions screen (the REQUIRED item, Installer
+  # permission, is already Granted; the "Grant" rows are optional OBB /
+  # background / app-links grants we do not need — do NOT tap them, they
+  # open system settings pages). NOTE: there is deliberately NO "allow"
+  # keyword here: run 43890276572 tapped the descriptive text "Allow
+  # installing apps from Aurora Store" 20+ times (a non-clickable TextView)
+  # and never reached Finish.
+  if tap_text "finish"; then sleep 4; continue; fi
   if tap_text "got it"; then sleep 2; continue; fi
   if tap_text "agree"; then sleep 3; continue; fi
   if tap_text "accept"; then sleep 3; continue; fi
