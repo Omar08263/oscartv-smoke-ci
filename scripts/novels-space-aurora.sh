@@ -220,22 +220,33 @@ echo "== launch Aurora Store =="
 # the foreground — a failed am start exits 0 through the pipe, so never trust
 # the launch command's exit code alone.
 AURORA_ACT="com.aurora.store/com.aurora.store.ComposeActivity"
-foreground_pkg() {
-  adb -s "$DEV" shell dumpsys window windows 2>/dev/null | grep -i "mCurrentFocus" | head -1
+# Foreground check — run 43889409239: Aurora DID launch (welcome screen in
+# the dump) but `dumpsys window windows | grep mCurrentFocus` never matched
+# on Redroid, so the run failed itself. Use the resumed-activity line from
+# `dumpsys activity activities` first, window-manager focus as fallback.
+is_foreground() { # $1 = package
+  local out
+  out=$(adb -s "$DEV" shell dumpsys activity activities 2>/dev/null | grep -iE "ResumedActivity" | head -3)
+  echo "  resumed: $out" | head -3
+  echo "$out" | grep -q "$1" && return 0
+  out=$(adb -s "$DEV" shell dumpsys window windows 2>/dev/null | grep -iE "mCurrentFocus|mFocusedApp" | head -3)
+  echo "  focus: $out" | head -3
+  echo "$out" | grep -q "$1" && return 0
+  return 1
 }
 LAUNCH_OK=0
 for attempt in 1 2 3; do
   adb -s "$DEV" shell am start -W -n "$AURORA_ACT" 2>&1 | tail -3 || true
   sleep 4
-  if foreground_pkg | grep -q "$AURORA_PKG"; then LAUNCH_OK=1; break; fi
+  if is_foreground "$AURORA_PKG"; then LAUNCH_OK=1; break; fi
   echo "Aurora not in foreground after am start (attempt $attempt) — trying monkey"
   adb -s "$DEV" shell monkey -p "$AURORA_PKG" -c android.intent.category.LAUNCHER 1 2>&1 | tail -2 || true
   sleep 4
-  if foreground_pkg | grep -q "$AURORA_PKG"; then LAUNCH_OK=1; break; fi
+  if is_foreground "$AURORA_PKG"; then LAUNCH_OK=1; break; fi
   sleep 5
 done
 ui_dump aurora-00-launch
-foreground_pkg
+is_foreground "$AURORA_PKG" || true
 [ "$LAUNCH_OK" = "1" ] || fail "AURORA_LAUNCH_FAILED (Aurora never reached foreground)"
 sleep 3
 ui_dump aurora-00-launch
@@ -248,7 +259,7 @@ echo "== Aurora onboarding: drive to ANONYMOUS login (up to ~25 steps) =="
 ONBOARD_OK=0
 for step in $(seq 1 25); do
   ui_dump "aurora-onboard-$step"
-  if ! foreground_pkg | grep -q "$AURORA_PKG"; then
+  if ! is_foreground "$AURORA_PKG"; then
     echo "onboarding step $step: Aurora NOT in foreground — relaunching"
     adb -s "$DEV" shell monkey -p "$AURORA_PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
     sleep 4
@@ -282,7 +293,7 @@ if [ "$ONBOARD_OK" != "1" ]; then
   # labels differ (Compose builds vary). Require Aurora in the foreground AND
   # a search affordance — the Redroid launcher also has a "Search" bar, so
   # the search text alone (run 43885970744) is NOT enough evidence.
-  if foreground_pkg | grep -q "$AURORA_PKG" && ui_has "search"; then
+  if is_foreground "$AURORA_PKG" && ui_has "search"; then
     echo "main screen assumed (Aurora foreground + search affordance present)"
     ONBOARD_OK=1
   else
