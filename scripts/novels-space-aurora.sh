@@ -156,19 +156,30 @@ try:
     root = ET.parse("/tmp/window_dump.xml").getroot()
 except Exception:
     sys.exit(1)
-for n in root.iter("node"):
-    t = (n.get("text") or "")
-    d = (n.get("content-desc") or "")
-    hay = (t + " " + d).lower()
-    if pat in hay and n.get("clickable") == "true":
-        if "google" in hay and "google" not in pat:
-            continue
-        b = n.get("bounds") or ""
-        m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", b)
-        if m:
-            x1, y1, x2, y2 = map(int, m.groups())
-            print((x1 + x2) // 2, (y1 + y2) // 2)
-            sys.exit(0)
+def find(clickable_only):
+    for n in root.iter("node"):
+        t = (n.get("text") or "")
+        d = (n.get("content-desc") or "")
+        hay = (t + " " + d).lower()
+        if pat in hay:
+            if "google" in hay and "google" not in pat:
+                continue
+            if clickable_only and n.get("clickable") != "true":
+                continue
+            b = n.get("bounds") or ""
+            m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", b)
+            if m:
+                x1, y1, x2, y2 = map(int, m.groups())
+                print((x1 + x2) // 2, (y1 + y2) // 2)
+                return True
+    return False
+# Pass 1: clickable nodes (normal buttons). Pass 2: ANY node whose bounds
+# contain the text — Compose often marks the Text itself non-clickable while
+# its parent handles the tap; tapping the text centre still hits the parent.
+if find(True):
+    sys.exit(0)
+if find(False):
+    sys.exit(0)
 sys.exit(1)
 PYEOF
 )
@@ -203,9 +214,30 @@ PYEOF
 }
 
 echo "== launch Aurora Store =="
-adb -s "$DEV" shell am start -W -n "$AURORA_PKG/com.aurora.store.MainActivity" 2>&1 | tail -5 || \
-  adb -s "$DEV" shell monkey -p "$AURORA_PKG" -c android.intent.category.LAUNCHER 1 2>&1 | tail -3
-sleep 5
+# 4.8.4 is a Compose rewrite: the launcher activity is ComposeActivity, NOT
+# MainActivity (run 43885970744: am start MainActivity -> Error type 3).
+# Use monkey (resolves the real launcher activity) and VERIFY Aurora is in
+# the foreground — a failed am start exits 0 through the pipe, so never trust
+# the launch command's exit code alone.
+AURORA_ACT="com.aurora.store/com.aurora.store.ComposeActivity"
+foreground_pkg() {
+  adb -s "$DEV" shell dumpsys window windows 2>/dev/null | grep -i "mCurrentFocus" | head -1
+}
+LAUNCH_OK=0
+for attempt in 1 2 3; do
+  adb -s "$DEV" shell am start -W -n "$AURORA_ACT" 2>&1 | tail -3 || true
+  sleep 4
+  if foreground_pkg | grep -q "$AURORA_PKG"; then LAUNCH_OK=1; break; fi
+  echo "Aurora not in foreground after am start (attempt $attempt) — trying monkey"
+  adb -s "$DEV" shell monkey -p "$AURORA_PKG" -c android.intent.category.LAUNCHER 1 2>&1 | tail -2 || true
+  sleep 4
+  if foreground_pkg | grep -q "$AURORA_PKG"; then LAUNCH_OK=1; break; fi
+  sleep 5
+done
+ui_dump aurora-00-launch
+foreground_pkg
+[ "$LAUNCH_OK" = "1" ] || fail "AURORA_LAUNCH_FAILED (Aurora never reached foreground)"
+sleep 3
 ui_dump aurora-00-launch
 
 echo "== Aurora onboarding: drive to ANONYMOUS login (up to ~25 steps) =="
@@ -216,6 +248,12 @@ echo "== Aurora onboarding: drive to ANONYMOUS login (up to ~25 steps) =="
 ONBOARD_OK=0
 for step in $(seq 1 25); do
   ui_dump "aurora-onboard-$step"
+  if ! foreground_pkg | grep -q "$AURORA_PKG"; then
+    echo "onboarding step $step: Aurora NOT in foreground — relaunching"
+    adb -s "$DEV" shell monkey -p "$AURORA_PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
+    sleep 4
+    continue
+  fi
   if ui_has "anonymous"; then
     tap_text "anonymous" && { sleep 4; continue; }
   fi
@@ -241,9 +279,11 @@ for step in $(seq 1 25); do
 done
 if [ "$ONBOARD_OK" != "1" ]; then
   # One last check: maybe we are already on the main screen but the tab
-  # labels differ (Compose builds vary). Check for the search affordance.
-  if ui_has "search"; then
-    echo "main screen assumed (search affordance present)"
+  # labels differ (Compose builds vary). Require Aurora in the foreground AND
+  # a search affordance — the Redroid launcher also has a "Search" bar, so
+  # the search text alone (run 43885970744) is NOT enough evidence.
+  if foreground_pkg | grep -q "$AURORA_PKG" && ui_has "search"; then
+    echo "main screen assumed (Aurora foreground + search affordance present)"
     ONBOARD_OK=1
   else
     ui_dump aurora-onboard-stuck
@@ -259,6 +299,16 @@ adb -s "$DEV" shell am start -a android.intent.action.VIEW \
   -d "market://details?id=$PKG" "$AURORA_PKG" 2>&1 | tail -3
 sleep 8
 ui_dump aurora-app-page
+# Android shows a confirmation bottom sheet for the external deep link:
+# "Continue to Aurora Store? / An external app wants to open Aurora Store /
+# com.fadariwyat.cenele / Cancel | Open" (run 43885970744 sat on this sheet).
+# Tap "Open" to enter Aurora's app page.
+if ui_has "Continue to Aurora Store"; then
+  echo "deep-link confirmation sheet present — tapping Open"
+  tap_text "open" || tap_text "Open"
+  sleep 8
+  ui_dump aurora-app-page-opened
+fi
 # The deep link must land on OUR package. Aurora shows the package name on the
 # app page (details section). If the page shows the WRONG app, abort.
 if ui_has "zxc.laitooo"; then
