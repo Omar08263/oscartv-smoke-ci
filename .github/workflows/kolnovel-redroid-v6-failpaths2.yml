@@ -1,0 +1,26 @@
+name: kolnovel-redroid-v6-failpaths2
+# Kolnovel v6 — failure path round 2 (problem 2, Case B2): REAL network loss
+# mid-fetch. Airplane mode proved a no-op on Redroid (run 44315957097), so
+# this run cuts the app's network with an iptables UID DROP (fallback: a
+# dead http_proxy) 8 s into a 401-chapter export. Clean failure = error
+# toast, NO print job, NO PDF, NO crash, Activity finishes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v6-failpaths2.yml'
+      - 'scripts/kolnovel-redroid-v6-failpaths2.sh'
+  workflow_dispatch:
+jobs:
+  redroid:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid v6 failure path B2 (iptables network cut mid-fetch)
+        run: bash scripts/kolnovel-redroid-v6-failpaths2.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-redroid-v6-failpaths2-artifacts
+          path: artifacts/
