@@ -1,0 +1,24 @@
+name: kolnovel-redroid-v5-export
+# Kolnovel v5 - full PDF export on REAL arm64 (Redroid).
+# Taps "تصدير PDF", waits for the system print dialog, tries Save as PDF,
+# pulls the PDF if one lands in Download.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v5-export.yml'
+      - 'scripts/kolnovel-redroid-v5-export.sh'
+  workflow_dispatch:
+jobs:
+  redroid:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid v5 full export test
+        run: bash scripts/kolnovel-redroid-v5-export.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-redroid-v5-export-artifacts
+          path: artifacts/
