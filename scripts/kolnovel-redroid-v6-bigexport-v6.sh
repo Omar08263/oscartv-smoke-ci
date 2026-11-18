@@ -11,6 +11,11 @@
 # the PDF must auto-save straight to Download/Kolnovel/.
 # Success = a pulled PDF per phase with page count ~= chapters + cover/TOC
 # and all headings in order (checked offline after the run, not here).
+# Run-1 fixes (2026-11-18): find_pdf no longer strips spaces from paths
+# (the run-1 pull failed: "Kolnovel-القسالمجنون-Part1.pdf" is not a file),
+# and the P2 phase now excludes the P1 PDF (else it "finds" the P1 PDF).
+# Run 1 proved the pipeline (chooser + auto-save PDFs on device: P1 20.5MB,
+# P2 15.7MB, no crash); this re-run exists to PULL the PDFs for V3/V5.
 # Failure modes recorded with evidence: crash (FATAL/SIGSEGV in OUR app),
 # renderer death (guard must turn it into a clean fail, not a SIGTRAP),
 # timeout (no PDF and no dialog in 40 min).
@@ -24,6 +29,7 @@ ACT="com.benabdellah.KolNovelApp/.MainActivity"
 PDF_ACT="com.benabdellah.KolNovelApp/.PdfExportActivity"
 DEV="localhost:5555"
 INSTALL_OK=0
+EXCLUDE_PDF=""
 
 dump_ui() {
   local name="$1"
@@ -65,8 +71,14 @@ mem_snapshot() { # $1 = tag
   } >> artifacts/mem.log 2>&1 || true
 }
 # find_pdf: prints the newest PDF path in the auto-save dir or Download, else empty.
+# Skips $EXCLUDE_PDF (the P1 PDF, so the P2 phase waits for its own PDF).
+# NOTE: tr strips \r and \n ONLY — never spaces (filenames contain spaces;
+# stripping them mangles the path and the pull fails — bigexport run 1 bug).
 find_pdf() {
-  adb -s "$DEV" shell "ls -t /sdcard/Download/Kolnovel/*.pdf /sdcard/Download/*.pdf /sdcard/Documents/*.pdf 2>/dev/null | head -1" 2>/dev/null | tr -d '\r\n '
+  local p
+  p=$(adb -s "$DEV" shell "ls -t /sdcard/Download/Kolnovel/*.pdf /sdcard/Download/*.pdf /sdcard/Documents/*.pdf 2>/dev/null | head -1" 2>/dev/null | tr -d '\r\n')
+  if [ -n "$EXCLUDE_PDF" ] && [ "$p" = "$EXCLUDE_PDF" ]; then echo ""; return 0; fi
+  echo "$p"
 }
 # wait_for_pdf_or_dialog $1=tag $2=max_minutes — sets WAIT_OUTCOME to
 # autosave|dialog|died|timeout and WAIT_PDF to the pdf path (autosave case).
@@ -153,7 +165,7 @@ pull_stable_pdf() {
   local LAST=-1 STABLE=0
   for w in $(seq 1 60); do
     local SZ
-    SZ=$(adb -s "$DEV" shell "stat -c %s '$remote' 2>/dev/null" | tr -d '\r\n ')
+    SZ=$(adb -s "$DEV" shell "stat -c %s '$remote' 2>/dev/null" | tr -d '\r\n')
     echo "size poll $w: ${SZ:-?}"
     if [ -n "$SZ" ] && [ "$SZ" -gt 0 ] 2>/dev/null && [ "$SZ" = "$LAST" ]; then STABLE=1; break; fi
     LAST="$SZ"
@@ -247,6 +259,7 @@ if [ "$INSTALL_OK" = "1" ]; then
   if [ "$P1_OUTCOME" = "autosave" ]; then
     pull_stable_pdf "$WAIT_PDF" "exported-p1.pdf"
     [ "$PULLED" = "1" ] && P1_OUTCOME="autosave-pdf"
+    EXCLUDE_PDF="$WAIT_PDF"
   elif [ "$P1_OUTCOME" = "dialog" ]; then
     save_via_dialog "p1"
     pull_stable_pdf "$DIALOG_PDF" "exported-p1.pdf"
