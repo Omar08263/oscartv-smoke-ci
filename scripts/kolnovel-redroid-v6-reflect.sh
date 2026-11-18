@@ -11,7 +11,7 @@ set -u
 mkdir -p artifacts
 exec > >(tee artifacts/run.log) 2>&1
 
-APK="app/ReflectTest-v2.apk"
+APK="app/ReflectTest-v3.apk"
 PKG="com.kolnovel.reflecttest"
 ACT="com.kolnovel.reflecttest/.MainActivity"
 DEV="localhost:5555"
@@ -70,12 +70,14 @@ if [ "$INSTALL_OK" = "1" ]; then
   echo "== pull result file + test PDF =="
   adb -s "$DEV" shell "ls -la /sdcard/Android/data/$PKG/files/ 2>/dev/null" | tee artifacts/files.txt || true
   adb -s "$DEV" pull "/sdcard/Android/data/$PKG/files/reflect-result.txt" artifacts/reflect-result.txt 2>&1 | tail -1 || true
-  adb -s "$DEV" pull "/sdcard/Android/data/$PKG/files/reflect-test.pdf" artifacts/reflect-test.pdf 2>&1 | tail -1 || true
-  if [ -f artifacts/reflect-test.pdf ]; then
-    ls -la artifacts/reflect-test.pdf
-    head -c 8 artifacts/reflect-test.pdf | od -c | head -2
-    echo "pdf_head: $(head -c 5 artifacts/reflect-test.pdf)"
-  else echo "no reflect-test.pdf pulled"; fi
+  adb -s "$DEV" pull "/sdcard/Android/data/$PKG/files/reflect-test-a.pdf" artifacts/reflect-test-a.pdf 2>&1 | tail -1 || true
+  adb -s "$DEV" pull "/sdcard/Android/data/$PKG/files/reflect-test-b.pdf" artifacts/reflect-test-b.pdf 2>&1 | tail -1 || true
+  for pf in artifacts/reflect-test-a.pdf artifacts/reflect-test-b.pdf; do
+    if [ -f "$pf" ]; then
+      ls -la "$pf"
+      echo "pdf_head $pf: $(head -c 5 "$pf" 2>/dev/null)"
+    else echo "no $pf pulled"; fi
+  done
   grep -h "REFLECT_AUTO_SAVE=" artifacts/reflect-result.txt artifacts/logcat.txt 2>/dev/null | head -3 | tee artifacts/VERDICT.txt || echo "NO VERDICT FOUND" | tee artifacts/VERDICT.txt
 fi
 
