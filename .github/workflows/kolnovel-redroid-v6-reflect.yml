@@ -9,7 +9,7 @@ on:
     paths:
       - '.github/workflows/kolnovel-redroid-v6-reflect.yml'
       - 'scripts/kolnovel-redroid-v6-reflect.sh'
-      - 'app/ReflectTest-v1.apk'
+      - 'app/ReflectTest-v2.apk'
   workflow_dispatch:
 jobs:
   redroid:

@@ -11,7 +11,7 @@ set -u
 mkdir -p artifacts
 exec > >(tee artifacts/run.log) 2>&1
 
-APK="app/ReflectTest-v1.apk"
+APK="app/ReflectTest-v2.apk"
 PKG="com.kolnovel.reflecttest"
 ACT="com.kolnovel.reflecttest/.MainActivity"
 DEV="localhost:5555"
