@@ -55,6 +55,39 @@ sys.exit(1)
 PYEOF
 )
   if [ -n "$bounds" ]; then
+    # If the target sits near the bottom edge (y>1000) the tap can miss or hit
+    # the nav gesture area; swipe up to centre it, then re-find fresh bounds.
+    local ty
+    ty=$(echo "$bounds" | awk '{print $2}')
+    if [ "$ty" -gt 1000 ]; then
+      echo "target y=$ty near bottom edge; centring it first"
+      adb -s "$DEV" shell input swipe 360 900 360 600 2>&1 || true
+      sleep 3
+      adb -s "$DEV" shell uiautomator dump /sdcard/ui-current.xml 2>/dev/null
+      adb -s "$DEV" pull /sdcard/ui-current.xml "$f" 2>/dev/null
+      bounds=$(python3 - "$f" "$needle" <<'PYEOF'
+import sys, re, xml.etree.ElementTree as ET
+f, needle = sys.argv[1], sys.argv[2]
+try:
+    root = ET.parse(f).getroot()
+except Exception:
+    sys.exit(1)
+for node in root.iter('node'):
+    t = node.get('text') or ''
+    cd = node.get('content-desc') or ''
+    if needle in t or needle in cd:
+        b = node.get('bounds') or ''
+        m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', b)
+        if m:
+            x1,y1,x2,y2 = map(int, m.groups())
+            print((x1+x2)//2, (y1+y2)//2)
+            sys.exit(0)
+sys.exit(1)
+PYEOF
+)
+      if [ -z "$bounds" ]; then echo "target lost after centring swipe"; return 1; fi
+      echo "re-found '$needle' at $bounds after centring"
+    fi
     echo "tapping '$needle' at $bounds"
     # shellcheck disable=SC2086
     adb -s "$DEV" shell input tap $bounds 2>&1
