@@ -8,6 +8,7 @@
 # Best-effort navigation: every step is logged; the verdict is whether the
 # button text appears in a UI dump on the detail screen.
 # APK under test: Kolnovel-v5.2.5-premium-v5.apk sha256 1951f2c7d975298c4cd611b0b49a323c5238473c2d3975a2251e934a10a39719 (rebuilt 2026-11-18: sequential chapter numbering).
+# Retry 2026-11-18: run 44298533788 died on the launcher (novel tap missed — known harness flake, same as v4 run 44290737850).
 set -u
 mkdir -p artifacts
 exec > >(tee artifacts/run.log) 2>&1
