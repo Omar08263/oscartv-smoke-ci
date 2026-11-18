@@ -207,29 +207,31 @@ if [ "$INSTALL_OK" = "1" ]; then
       for w in $(seq 1 30); do
         sleep 10
         dump_ui "printwait-$w" >/dev/null 2>&1
-        # print dialog markers: printer picker / Save as PDF / Print button
-        if grep -qiE "Save as PDF|Print|طابعة|حفظ" "artifacts/ui-printwait-$w.xml" 2>/dev/null; then
-          # confirm it is the print dialog (has a printer / save affordance), not the app
-          if grep -qiE "Save as PDF" "artifacts/ui-printwait-$w.xml" 2>/dev/null; then
-            PRINT_DIALOG=1
-            echo "PRINT DIALOG APPEARED after ~$((w * 10))s"
-            adb -s "$DEV" exec-out screencap -p > artifacts/screen-printdialog.png 2>/dev/null || true
-            cp "artifacts/ui-printwait-$w.xml" artifacts/ui-printdialog.xml
-            break
-          fi
+        # The dialog's initial state shows "Select a printer" (Save as PDF is
+        # a printer choice inside that dropdown, not visible yet).
+        if grep -qiE "Select a printer" "artifacts/ui-printwait-$w.xml" 2>/dev/null; then
+          PRINT_DIALOG=1
+          echo "PRINT DIALOG APPEARED after ~$((w * 10))s"
+          adb -s "$DEV" exec-out screencap -p > artifacts/screen-printdialog.png 2>/dev/null || true
+          cp "artifacts/ui-printwait-$w.xml" artifacts/ui-printdialog.xml
+          break
         fi
         if [ $((w % 6)) = 0 ]; then echo "  waited $((w * 10))s, no print dialog yet"; adb -s "$DEV" exec-out screencap -p > artifacts/screen-wait-$w.png 2>/dev/null || true; fi
       done
       if [ "$PRINT_DIALOG" = "1" ]; then
-        echo "== try Save as PDF via the print dialog =="
-        # Tap "Save as PDF" if it is a selectable printer row, then the save/print button.
-        tap_text "Save as PDF" || echo "Save-as-PDF row tap failed (may already be selected)"
+        echo "== pick Save as PDF from the printer dropdown =="
+        tap_text "Select a printer" || echo "Select-a-printer tap failed"
+        sleep 3
+        dump_ui printpick >/dev/null 2>&1
+        adb -s "$DEV" exec-out screencap -p > artifacts/screen-printpick.png 2>/dev/null || true
+        tap_text "Save as PDF" || echo "Save-as-PDF row tap failed"
         sleep 3
         dump_ui printdialog2 >/dev/null 2>&1
         adb -s "$DEV" exec-out screencap -p > artifacts/screen-printdialog2.png 2>/dev/null || true
-        # The dialog's confirm button is usually a checkmark / SAVE / print icon.
-        tap_text "SAVE" || tap_text "Save" || tap_text "حفظ" || echo "no SAVE button text found; trying bottom-right tap"
-        sleep 5
+        echo "== confirm/save (bottom-right checkmark FAB) =="
+        # The confirm control is a FAB; tap its on-screen position (bottom-right).
+        adb -s "$DEV" shell input tap 557 1098 2>&1 || true
+        sleep 8
         adb -s "$DEV" exec-out screencap -p > artifacts/screen-aftersave.png 2>/dev/null || true
         dump_ui aftersave >/dev/null 2>&1
         # Look for a saved PDF in Download (system print spooler saves there when Save as PDF is picked).
