@@ -7,6 +7,7 @@
 # -> wait up to 300s for print dialog -> screenshot -> try Save as PDF.
 # Best-effort navigation: every step is logged; the verdict is whether the
 # button text appears in a UI dump on the detail screen.
+# APK under test: Kolnovel-v5.2.5-premium-v5.apk sha256 1951f2c7d975298c4cd611b0b49a323c5238473c2d3975a2251e934a10a39719 (rebuilt 2026-11-18: sequential chapter numbering).
 set -u
 mkdir -p artifacts
 exec > >(tee artifacts/run.log) 2>&1
