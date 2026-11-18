@@ -110,11 +110,12 @@ if [ "$INSTALL_OK" = "1" ]; then
   dump_ui home
   adb -s "$DEV" exec-out screencap -p > artifacts/screen-home.png 2>/dev/null || true
 
-  echo "== open a novel (tap the first novel title/card) =="
-  # Try a few likely novel entry points by tapping the centre-top area
-  # where the home list usually shows the first novel.
-  adb -s "$DEV" shell input tap 360 400 2>&1 || true
-  sleep 8
+  echo "== open a novel (tap the middle cover at 360,750) =="
+  # Home layout (proven by run 44271864905 screen-home.png): novel covers
+  # sit at y~700-800; the middle cover is at ~(360,750). Tapping there
+  # opens the novel detail screen (NovelDetailsScreen -> SeriesListHeaderInner).
+  adb -s "$DEV" shell input tap 360 750 2>&1 || true
+  sleep 10
   dump_ui afternovel
   adb -s "$DEV" exec-out screencap -p > artifacts/screen-novel.png 2>/dev/null || true
 
@@ -123,13 +124,14 @@ if [ "$INSTALL_OK" = "1" ]; then
     BUTTON_FOUND=1
     echo "BUTTON FOUND: 'تصدير PDF' present in the novel detail UI dump"
   else
-    echo "BUTTON NOT in ui-afternovel; trying a second tap location"
-    adb -s "$DEV" shell input tap 360 600 2>&1 || true
-    sleep 8
+    echo "BUTTON NOT in ui-afternovel; the detail screen may need a scroll to the content tab header - swiping up then re-dumping"
+    adb -s "$DEV" shell input swipe 360 800 360 300 2>&1 || true
+    sleep 5
     dump_ui afternovel2
+    adb -s "$DEV" exec-out screencap -p > artifacts/screen-novel2.png 2>/dev/null || true
     if grep -q "تصدير PDF" artifacts/ui-afternovel2.xml 2>/dev/null; then
       BUTTON_FOUND=1
-      echo "BUTTON FOUND on second attempt"
+      echo "BUTTON FOUND after scroll"
     else
       echo "BUTTON NOT FOUND in either UI dump"
     fi
