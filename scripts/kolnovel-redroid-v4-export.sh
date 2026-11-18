@@ -148,17 +148,28 @@ if [ "$INSTALL_OK" = "1" ]; then
   PRINT_DIALOG=0
   PDF_SAVED=0
   if [ "$BUTTON_FOUND" = "1" ]; then
-    echo "== tap the PDF button =="
-    if tap_text "تصدير PDF"; then
-      BUTTON_TAPPED=1
-      sleep 5
-      adb -s "$DEV" exec-out screencap -p > artifacts/screen-aftertap.png 2>/dev/null || true
-      adb -s "$DEV" logcat -d > artifacts/logcat-aftertap.txt 2>&1 || true
-      if grep -qi "PdfExportActivity" artifacts/logcat-aftertap.txt; then
-        echo "BUTTON TAP: PdfExportActivity started (in logcat)"
+    echo "== tap the PDF button (retry up to 3x until PdfExportActivity starts) =="
+    for attempt in 1 2 3; do
+      if tap_text "تصدير PDF"; then
+        BUTTON_TAPPED=1
+        sleep 6
+        adb -s "$DEV" logcat -d > artifacts/logcat-aftertap.txt 2>&1 || true
+        if grep -qi "PdfExportActivity" artifacts/logcat-aftertap.txt; then
+          echo "BUTTON TAP (attempt $attempt): PdfExportActivity started (in logcat)"
+          break
+        else
+          echo "BUTTON TAP (attempt $attempt): PdfExportActivity NOT seen yet; re-dumping and retrying"
+          dump_ui "retap-$attempt" >/dev/null 2>&1
+        fi
       else
-        echo "BUTTON TAP: PdfExportActivity NOT seen in logcat yet"
+        echo "tap_text failed on attempt $attempt"
       fi
+    done
+    adb -s "$DEV" exec-out screencap -p > artifacts/screen-aftertap.png 2>/dev/null || true
+    if ! grep -qi "PdfExportActivity" artifacts/logcat-aftertap.txt 2>/dev/null; then
+      echo "BUTTON TAP: PdfExportActivity NEVER started after 3 attempts"
+    fi
+    if grep -qi "PdfExportActivity" artifacts/logcat-aftertap.txt 2>/dev/null; then
       echo "== wait up to 300s for the system print dialog =="
       for w in $(seq 1 30); do
         sleep 10
@@ -191,7 +202,8 @@ if [ "$INSTALL_OK" = "1" ]; then
         # Look for a saved PDF in Download (system print spooler saves there when Save as PDF is picked).
         echo "== look for a saved PDF on device =="
         adb -s "$DEV" shell "ls -la /sdcard/Download/*.pdf /sdcard/Documents/*.pdf 2>/dev/null; ls -la /sdcard/Download/Kolnovel/ 2>/dev/null" | tee artifacts/pdflist.txt || true
-        PDFFILE=$(adb -s "$DEV" shell "ls -t /sdcard/Download/*.pdf 2>/dev/null | head -1" | tr -d '')
+        PDFFILE=$(adb -s "$DEV" shell "ls -t /sdcard/Download/*.pdf 2>/dev/null | head -1" | tr -d '
+')
         if [ -n "$PDFFILE" ]; then
           echo "PDF FOUND on device: $PDFFILE"
           adb -s "$DEV" pull "$PDFFILE" artifacts/exported.pdf 2>&1 | tail -1
