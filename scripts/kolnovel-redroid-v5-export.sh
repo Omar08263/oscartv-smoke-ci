@@ -247,20 +247,30 @@ if [ "$INSTALL_OK" = "1" ]; then
         sleep 3
         dump_ui printdialog2 >/dev/null 2>&1
         adb -s "$DEV" exec-out screencap -p > artifacts/screen-printdialog2.png 2>/dev/null || true
-        echo "== confirm/save (bottom-right checkmark FAB) =="
-        # The confirm control is a FAB; tap its on-screen position (bottom-right).
-        adb -s "$DEV" shell input tap 557 1098 2>&1 || true
+        echo "== confirm/save (tap the Save-to-PDF button by content-desc) =="
+        # The save control is an ImageButton with content-desc "Save to PDF"
+        # (resource-id com.android.printspooler:id/print_button, top-right).
+        # A fixed-coordinate tap is WRONG here: (557,1098) hits the page
+        # selection toggle in the preview bar (run 44294383065 proved it).
+        tap_text "Save to PDF" || echo "Save-to-PDF button tap failed"
         sleep 8
         adb -s "$DEV" exec-out screencap -p > artifacts/screen-aftersave.png 2>/dev/null || true
-        dump_ui aftersave >/dev/null 2>&1
-        # A system file-picker ("SAVE") may appear after the FAB tap; confirm it.
-        if grep -qiE "SAVE" artifacts/ui-aftersave.xml 2>/dev/null; then
-          echo "SAF save picker appeared; tapping SAVE"
-          tap_text "SAVE" || tap_text "Save" || echo "SAVE tap failed"
+        # The system file-picker (exact button text "SAVE") may take a moment
+        # to appear while the spooler generates the PDF; poll up to 30s.
+        # NOTE: match text="SAVE" EXACTLY (case-sensitive) — a loose "SAVE"
+        # grep false-positives on the "Save as PDF" printer row.
+        for s in $(seq 1 6); do
+          dump_ui "aftersave-$s" >/dev/null 2>&1
+          if grep -q 'text="SAVE"' "artifacts/ui-aftersave-$s.xml" 2>/dev/null; then
+            echo "SAF save picker appeared; tapping SAVE"
+            tap_text "SAVE" || echo "SAVE tap failed"
+            sleep 5
+            dump_ui aftersave2 >/dev/null 2>&1
+            adb -s "$DEV" exec-out screencap -p > artifacts/screen-aftersave2.png 2>/dev/null || true
+            break
+          fi
           sleep 5
-          dump_ui aftersave2 >/dev/null 2>&1
-          adb -s "$DEV" exec-out screencap -p > artifacts/screen-aftersave2.png 2>/dev/null || true
-        fi
+        done
         # Look for a saved PDF in Download (system print spooler saves there when Save as PDF is picked).
         echo "== look for a saved PDF on device (poll up to 90s) =="
         PDFFILE=""
