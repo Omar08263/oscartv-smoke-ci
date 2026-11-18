@@ -1,0 +1,26 @@
+name: kolnovel-redroid-v6-mitm500
+# Kolnovel v6 — server-500 failure path (problem 2, Case C): a mitmproxy
+# addon returns a REAL HTTP 500 for /reader/* after the 3rd request, so
+# the export hits 500s mid-fetch. Clean failure = error toast, NO print
+# job, NO PDF, NO crash. The mitm log proves the 500s fired.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v6-mitm500.yml'
+      - 'scripts/kolnovel-redroid-v6-mitm500.sh'
+      - 'scripts/kolnovel-mitm-500-addon.py'
+  workflow_dispatch:
+jobs:
+  redroid:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid v6 mitm 500-injection test
+        run: bash scripts/kolnovel-redroid-v6-mitm500.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-redroid-v6-mitm500-artifacts
+          path: artifacts/

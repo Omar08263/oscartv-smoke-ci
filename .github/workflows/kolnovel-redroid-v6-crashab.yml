@@ -1,0 +1,24 @@
+name: kolnovel-redroid-v6-crashab
+# Kolnovel v6 — crash-flake A/B (problem 3): does the detail-open
+# SIGSEGV/TypeError follow OUR patched header (v5) or is it stock flake (v3)?
+# Taps the same middle cover (novel 76237) 4x per APK and counts crashes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v6-crashab.yml'
+      - 'scripts/kolnovel-redroid-v6-crashab.sh'
+  workflow_dispatch:
+jobs:
+  redroid:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid v6 crash A/B (v3 vs v5 detail-open)
+        run: bash scripts/kolnovel-redroid-v6-crashab.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-redroid-v6-crashab-artifacts
+          path: artifacts/

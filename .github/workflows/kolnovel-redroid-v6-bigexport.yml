@@ -1,0 +1,25 @@
+name: kolnovel-redroid-v6-bigexport
+# Kolnovel v6 — big-novel stress (problem 1, V4): export novel 38916
+# «القس المجنون» (2,355 chapters, live) in ONE WebView print job via the
+# kexport:// deep link. Proves or disproves the single-job path with a
+# pulled PDF (page count + headings checked offline after the run).
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v6-bigexport.yml'
+      - 'scripts/kolnovel-redroid-v6-bigexport.sh'
+  workflow_dispatch:
+jobs:
+  redroid:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid v6 big-novel export (38916, 2355 ch)
+        run: bash scripts/kolnovel-redroid-v6-bigexport.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-redroid-v6-bigexport-artifacts
+          path: artifacts/
