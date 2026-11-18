@@ -256,14 +256,24 @@ if [ "$INSTALL_OK" = "1" ]; then
         # (resource-id com.android.printspooler:id/print_button, top-right).
         # A fixed-coordinate tap is WRONG here: (557,1098) hits the page
         # selection toggle in the preview bar (run 44294383065 proved it).
-        tap_text "Save to PDF" || echo "Save-to-PDF button tap failed"
+        # The save button (content-desc "Save to PDF") only appears once the
+        # print preview is READY. For big novels the dialog shows
+        # "Preparing preview..." for a while (run 44301688618: 401-ch novel,
+        # one immediate tap found no button and the save was lost).
+        # Poll up to 120s for the button, then tap it.
+        SAVED_TAP=0
+        for i in $(seq 1 24); do
+          if tap_text "Save to PDF"; then SAVED_TAP=1; break; fi
+          sleep 5
+        done
+        [ "$SAVED_TAP" = "1" ] || echo "Save-to-PDF button NEVER appeared (preview not ready?)"
         sleep 8
         adb -s "$DEV" exec-out screencap -p > artifacts/screen-aftersave.png 2>/dev/null || true
         # The system file-picker (exact button text "SAVE") may take a moment
         # to appear while the spooler generates the PDF; poll up to 30s.
         # NOTE: match text="SAVE" EXACTLY (case-sensitive) — a loose "SAVE"
         # grep false-positives on the "Save as PDF" printer row.
-        for s in $(seq 1 6); do
+        for s in $(seq 1 12); do
           dump_ui "aftersave-$s" >/dev/null 2>&1
           if grep -q 'text="SAVE"' "artifacts/ui-aftersave-$s.xml" 2>/dev/null; then
             echo "SAF save picker appeared; tapping SAVE"
