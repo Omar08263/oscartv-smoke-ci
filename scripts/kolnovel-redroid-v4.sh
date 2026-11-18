@@ -144,8 +144,8 @@ if [ "$INSTALL_OK" = "1" ]; then
     if adb -s "$DEV" logcat -d 2>/dev/null | grep -qi "print\|PrintManager\|PdfExport"; then
       echo "PdfExport log lines present after ~$((i * 10))s"
     fi
-    # Check if a print job exists
-    if adb -s "$DEV" shell dumpsys print 2>/dev/null | grep -qi "print job\|PrintJob"; then
+    # Check if a print job exists (dumpsys print uses "print_job" with underscore)
+    if adb -s "$DEV" shell dumpsys print 2>/dev/null | grep -qi "print_job"; then
       PDF_DIALOG=1
       echo "print job found after ~$((i * 10))s"
       break
@@ -163,6 +163,18 @@ if [ "$INSTALL_OK" = "1" ]; then
   adb -s "$DEV" exec-out screencap -p > artifacts/screen-pdf-dialog.png 2>/dev/null || true
   adb -s "$DEV" logcat -d > artifacts/logcat-pdf.txt 2>&1 || true
   adb -s "$DEV" shell dumpsys print > artifacts/dumpsys-print.txt 2>&1 || true
+  echo "== pull the generated PDF from the print spooler (for V3 content check) =="
+  adb -s "$DEV" root 2>&1 || true
+  sleep 3
+  adb -s "$DEV" shell ls -la /data/user/0/com.android.printspooler/files/ 2>&1 | tee artifacts/spooler-files.txt || true
+  SPOOL_PDF=$(adb -s "$DEV" shell ls /data/user/0/com.android.printspooler/files/*.pdf 2>/dev/null | head -1 | tr -d '\r')
+  echo "spooler pdf: $SPOOL_PDF"
+  if [ -n "$SPOOL_PDF" ]; then
+    adb -s "$DEV" pull "$SPOOL_PDF" artifacts/kolnovel-export.pdf 2>&1 | tee artifacts/pdf-pull.log || true
+    ls -la artifacts/kolnovel-export.pdf 2>&1 || true
+    # Also pull the Activity's cached HTML (proves the fetch + HTML build)
+    adb -s "$DEV" shell "run-as $PKG ls -la /data/data/$PKG/cache/ 2>/dev/null | head" || true
+  fi
   echo "== PdfExport log lines =="
   grep -i "PdfExport\|print" artifacts/logcat-pdf.txt | head -40 > artifacts/pdf-lines.txt || true
   cat artifacts/pdf-lines.txt
