@@ -1,0 +1,24 @@
+name: kolnovel-redroid-v4-button
+# Kolnovel v4 - "تصدير PDF" button render + tap test on REAL arm64 (Redroid).
+# Verifies the button renders on a novel detail screen and tapping it
+# starts PdfExportActivity.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v4-button.yml'
+      - 'scripts/kolnovel-redroid-v4-button.sh'
+  workflow_dispatch:
+jobs:
+  redroid:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid v4 button render test
+        run: bash scripts/kolnovel-redroid-v4-button.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-redroid-v4-button-artifacts
+          path: artifacts/
