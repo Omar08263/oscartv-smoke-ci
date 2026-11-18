@@ -1,0 +1,26 @@
+name: kolnovel-redroid-v6-renderkill
+# Kolnovel v6 — renderer-death guard test (problem 2, Case B3).
+# The B2 dead-proxy cut never took effect (the export succeeded), so
+# this run kills the print WebView renderer process directly (kill -9)
+# mid-print. Without the guard the app SIGTRAPs; with it the app must
+# stay alive and fail cleanly.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v6-renderkill.yml'
+      - 'scripts/kolnovel-redroid-v6-renderkill.sh'
+  workflow_dispatch:
+jobs:
+  redroid:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid v6 renderer-kill guard test (B3)
+        run: bash scripts/kolnovel-redroid-v6-renderkill.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-redroid-v6-renderkill-artifacts
+          path: artifacts/

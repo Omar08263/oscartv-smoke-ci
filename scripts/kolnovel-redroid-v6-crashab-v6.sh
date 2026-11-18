@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Kolnovel v6 FINAL - Crash-flake A/B (problem 3 FIX): v3 vs v6.
+# Kolnovel v6 FINAL - Crash-flake A/B (problem 3 FIX, round 2): v3 vs v6b.
+# v6b bundle fix: colors/details are read from the FUNCTION PROPS (r19/r0
+# stash), NOT re-derived from items[0].props — v6 (bundle-a) crashed 1/4
+# with TypeError "Cannot read property onSurfaceVariant of undefined"
+# (items[0].props.colors was undefined in cycle 4).
 # Question: does the detail-open SIGSEGV/TypeError follow OUR patched header
 # (fn 21721 SeriesListHeaderInner, v4/v5) or is it stock/environment flake?
 # Method: install v3 (stock header, NO button patch) and v5 (patched header),
