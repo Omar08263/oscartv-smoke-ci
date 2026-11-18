@@ -119,21 +119,28 @@ if [ "$INSTALL_OK" = "1" ]; then
   dump_ui afternovel
   adb -s "$DEV" exec-out screencap -p > artifacts/screen-novel.png 2>/dev/null || true
 
-  echo "== look for the PDF button =="
+  echo "== look for the PDF button (scroll down to the chapter-list header) =="
   if grep -q "تصدير PDF" artifacts/ui-afternovel.xml 2>/dev/null; then
     BUTTON_FOUND=1
     echo "BUTTON FOUND: 'تصدير PDF' present in the novel detail UI dump"
   else
-    echo "BUTTON NOT in ui-afternovel; the detail screen may need a scroll to the content tab header - swiping up then re-dumping"
-    adb -s "$DEV" shell input swipe 360 800 360 300 2>&1 || true
-    sleep 5
-    dump_ui afternovel2
-    adb -s "$DEV" exec-out screencap -p > artifacts/screen-novel2.png 2>/dev/null || true
-    if grep -q "تصدير PDF" artifacts/ui-afternovel2.xml 2>/dev/null; then
-      BUTTON_FOUND=1
-      echo "BUTTON FOUND after scroll"
-    else
-      echo "BUTTON NOT FOUND in either UI dump"
+    echo "BUTTON NOT in ui-afternovel; scrolling down to the chapter-list header (up to 6 swipes)"
+    for i in 1 2 3 4 5 6; do
+      adb -s "$DEV" shell input swipe 360 900 360 300 2>&1 || true
+      sleep 4
+      dump_ui "afternovel-s$i"
+      if grep -q "تصدير PDF" "artifacts/ui-afternovel-s$i.xml" 2>/dev/null; then
+        BUTTON_FOUND=1
+        echo "BUTTON FOUND after scroll #$i"
+        cp "artifacts/ui-afternovel-s$i.xml" artifacts/ui-afternovel2.xml
+        adb -s "$DEV" exec-out screencap -p > artifacts/screen-novel2.png 2>/dev/null || true
+        break
+      fi
+      echo "scroll #$i: button not yet visible"
+    done
+    if [ "$BUTTON_FOUND" != "1" ]; then
+      echo "BUTTON NOT FOUND after 6 scrolls"
+      adb -s "$DEV" exec-out screencap -p > artifacts/screen-novel2.png 2>/dev/null || true
     fi
   fi
 
