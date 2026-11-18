@@ -144,8 +144,9 @@ if [ "$INSTALL_OK" = "1" ]; then
     if adb -s "$DEV" logcat -d 2>/dev/null | grep -qi "print\|PrintManager\|PdfExport"; then
       echo "PdfExport log lines present after ~$((i * 10))s"
     fi
-    # Check if a print job exists (dumpsys print uses "print_job" with underscore)
-    if adb -s "$DEV" shell dumpsys print 2>/dev/null | grep -qi "print_job"; then
+    # Check for a REAL print job: "print_job_id" only appears when a job
+    # exists. (Bare "print_job" false-positives on "has_active_print_jobs".)
+    if adb -s "$DEV" shell dumpsys print 2>/dev/null | grep -qi "print_job_id"; then
       PDF_DIALOG=1
       echo "print job found after ~$((i * 10))s"
       break
@@ -163,6 +164,8 @@ if [ "$INSTALL_OK" = "1" ]; then
   adb -s "$DEV" exec-out screencap -p > artifacts/screen-pdf-dialog.png 2>/dev/null || true
   adb -s "$DEV" logcat -d > artifacts/logcat-pdf.txt 2>&1 || true
   adb -s "$DEV" shell dumpsys print > artifacts/dumpsys-print.txt 2>&1 || true
+  echo "waiting 30s for the spooler to finish writing the PDF file"
+  sleep 30
   echo "== pull the generated PDF from the print spooler (for V3 content check) =="
   adb -s "$DEV" root 2>&1 || true
   sleep 3
