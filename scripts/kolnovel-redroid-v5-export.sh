@@ -294,11 +294,27 @@ if [ "$INSTALL_OK" = "1" ]; then
           if [ -n "$PDFFILE" ]; then echo "PDF appeared after ~$((p * 10))s: $PDFFILE"; break; fi
           sleep 10
         done
+        # The spooler creates the file EMPTY and writes into it afterwards
+        # (run 44303391673: pulled a 0-byte file 10s after SAVE for a 401-ch
+        # novel). Wait until the size is non-zero AND stable across two
+        # checks 10s apart (up to 180s) before pulling.
+        if [ -n "$PDFFILE" ]; then
+          LAST=-1; STABLE=0
+          for w in $(seq 1 18); do
+            SZ=$(adb -s "$DEV" shell "stat -c %s '$PDFFILE' 2>/dev/null" | tr -d '
+')
+            echo "size poll $w: ${SZ:-?}"
+            if [ -n "$SZ" ] && [ "$SZ" -gt 0 ] 2>/dev/null && [ "$SZ" = "$LAST" ]; then STABLE=1; break; fi
+            LAST="$SZ"
+            sleep 10
+          done
+          [ "$STABLE" = "1" ] || echo "WARNING: size never stabilized (last=$LAST)"
+        fi
         adb -s "$DEV" shell "ls -la /sdcard/Download/*.pdf /sdcard/Documents/*.pdf 2>/dev/null; ls -la /sdcard/Download/Kolnovel/ 2>/dev/null" | tee artifacts/pdflist.txt || true
         if [ -n "$PDFFILE" ]; then
           echo "PDF FOUND on device: $PDFFILE"
           adb -s "$DEV" pull "$PDFFILE" artifacts/exported.pdf 2>&1 | tail -1
-          if [ -f artifacts/exported.pdf ]; then PDF_SAVED=1; ls -la artifacts/exported.pdf; fi
+          if [ -s artifacts/exported.pdf ]; then PDF_SAVED=1; ls -la artifacts/exported.pdf; else echo "pulled PDF is EMPTY - not counted as saved"; PDF_SAVED=0; fi
         else
           echo "NO PDF in /sdcard/Download yet"
         fi
