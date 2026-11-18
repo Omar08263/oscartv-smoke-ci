@@ -1,0 +1,25 @@
+name: kolnovel-redroid-v4
+# Kolnovel v4 (PDF export) on REAL arm64 Android userspace (Redroid) - no KVM.
+# Runner: GitHub-hosted ubuntu-24.04-arm (native ARM64 host).
+# v4 = v3 premium + "تصدير PDF" button + PdfExportActivity (PrintManager).
+# Triggered by pushing this file or the script (no Actions:write needed).
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v4.yml'
+      - 'scripts/kolnovel-redroid-v4.sh'
+  workflow_dispatch:
+jobs:
+  redroid:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid v4 smoke + PDF export test
+        run: bash scripts/kolnovel-redroid-v4.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-redroid-v4-artifacts
+          path: artifacts/
