@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# Kolnovel v6 FINAL - Renderer-death guard test (problem 2, Case B3).
-# The v6 failpaths2 B2 run (44322850418) did NOT test the guard: the dead-proxy
-# cut never took effect (the export succeeded via auto-save), so no renderer
-# died. This run tests the guard DETERMINISTICALLY: start a 401-ch export,
-# wait for the print WebView's renderer process to appear, KILL it with
-# kill -9, and check the app survives. Without the guard (v5), Chromium
+# Kolnovel v6 FINAL - Renderer-death guard test (problem 2, Case B3), ROUND 2.
+# Round 1 (run 44325140824) killed a renderer at +8s — before the print
+# WebView existed, so it killed an IDLE renderer, not the print one (the app
+# survived, but that does not prove the guard handles a mid-print death).
+# Round 2 waits 55s (inside the print window: the 401-ch fetch takes ~43s,
+# onLayout/onWrite runs ~43-70s) and kills EVERY sandboxed_process pid, so the
+# print renderer definitely dies mid-print. Without the guard (v5), Chromium
 # deliberately SIGTRAPs the app ("Render process's crash wasn't handled by
 # all associated webviews"). With the guard (v6 onRenderProcessGone -> true),
 # the app must stay alive and fail cleanly (toast, no app SIGTRAP, no FATAL).
-# Expected: app_alive=YES, app_fatal=NO, guard_fired=YES (onRenderProcessGone
-# in logcat OR the clean-fail toast path taken).
 set -u
 mkdir -p artifacts
 exec > >(tee artifacts/run.log) 2>&1
@@ -98,29 +97,31 @@ if [ "$INSTALL_OK" = "1" ]; then
   tap_text "تخطي" || tap_text "التالي" || tap_text "Next" || echo "no skip/next"
   sleep 5
 
-  echo "== B3: export novel 76237 (401 ch), then kill the renderer mid-print =="
+  echo "== B3: export novel 76237 (401 ch), kill ALL renderers mid-print =="
   adb -s "$DEV" root 2>&1 || echo "adb root FAILED"
   sleep 3
   adb connect "$DEV" >/dev/null 2>&1 || true
   adb -s "$DEV" logcat -c 2>&1 || true
   adb -s "$DEV" shell am start -n "$PDF_ACT" --el titleId 76237 -e title "test" 2>&1 | tee artifacts/b3-start.log || true
-  echo "== poll up to 5 min for the WebView renderer process =="
-  for i in $(seq 1 60); do
-    RENDERER_PID=$(adb -s "$DEV" shell "ps -A -o PID,NAME 2>/dev/null | grep -i 'sandboxed_process' | head -1 | awk '{print \$1}'" 2>/dev/null | tr -d '\r\n ')
-    if [ -n "$RENDERER_PID" ]; then
-      echo "renderer process found: pid=$RENDERER_PID after ~$((i * 5))s"
-      break
-    fi
-    sleep 5
-  done
+  # TIMING (from the B2 v6 run): the 401-ch fetch takes ~43s; the print
+  # WebView's onLayout/onWrite runs ~43-70s after the Activity starts.
+  # The FIRST B3 run killed a renderer at +8s — before the print WebView
+  # existed (it killed an idle renderer, not the print one). So now we wait
+  # 55s (inside the print window) and kill EVERY sandboxed_process pid, so
+  # the print renderer definitely dies mid-print.
+  echo "waiting 55s to land inside the print phase (onLayout/onWrite)..."
+  sleep 55
+  RENDERER_PID=$(adb -s "$DEV" shell "ps -A -o PID,NAME 2>/dev/null | grep -i 'sandboxed_process' | awk '{print \$1}'" 2>/dev/null | tr '\r\n' ' ' | tr -d ' ')
+  echo "renderer pids before kill: ${RENDERER_PID:-none}"
   if [ -z "$RENDERER_PID" ]; then
-    echo "RENDERER NEVER APPEARED (no print WebView started?) — aborting"
+    echo "NO RENDERER FOUND at +55s (no print WebView?) — aborting"
     echo "RESULT: install_ok=$INSTALL_OK renderer_found=NO" | tee artifacts/RESULT.md
   else
-    echo "renderer pid=$RENDERER_PID; waiting 8s (let onLayout/onWrite start), then kill -9"
-    sleep 8
-    adb -s "$DEV" shell kill -9 "$RENDERER_PID" 2>&1 | tee artifacts/kill.log || echo "kill FAILED"
-    echo "killed renderer pid=$RENDERER_PID at $(date -u +%H:%M:%S)"
+    for pid in $RENDERER_PID; do
+      adb -s "$DEV" shell kill -9 "$pid" 2>&1 || echo "kill $pid FAILED"
+      echo "killed renderer pid=$pid at $(date -u +%H:%M:%S)"
+    done
+    echo "killed renderer pid(s)=$RENDERER_PID"
     sleep 15
     adb -s "$DEV" exec-out screencap -p > artifacts/screen-afterkill.png 2>/dev/null || true
     adb -s "$DEV" logcat -d > artifacts/logcat-afterkill.txt 2>&1 || true
