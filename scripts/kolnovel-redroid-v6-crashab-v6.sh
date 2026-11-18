@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Kolnovel v6 FINAL - Crash-flake A/B (problem 3 FIX, round 2): v3 vs v6b.
+# Kolnovel v6 FINAL - Crash-flake A/B (problem 3 FIX, round 3): v3 vs v6c.
+# v6c bundle fix: colors from the FUNCTION PROPS (r19) only — the v6b
+# Mov-r0 stash broke it deterministically (4/4 RangeError: r0 is `this`,
+# never a scratch register). Details still from items[0].props.
 # v6b bundle fix: colors/details are read from the FUNCTION PROPS (r19/r0
 # stash), NOT re-derived from items[0].props — v6 (bundle-a) crashed 1/4
 # with TypeError "Cannot read property onSurfaceVariant of undefined"
