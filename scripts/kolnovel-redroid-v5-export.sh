@@ -12,6 +12,7 @@
 # A/B 2026-11-18: testing the FIRST v5 build (sha 562a77e8) to check whether the
 # RawProps SIGSEGV on detail-open follows the novel (401-ch middle cover) or the rebuilt APK.
 # Build2 2026-11-18 (sha aeffa579): content images forced eager (lazy never loads in print WebView).
+# Retry 2026-11-18: run 44308428800 died on detail-open again (same RawProps flake, process died ~35s in).
 set -u
 mkdir -p artifacts
 exec > >(tee artifacts/run.log) 2>&1
