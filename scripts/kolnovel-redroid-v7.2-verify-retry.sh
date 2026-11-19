@@ -23,6 +23,43 @@ RESULT="artifacts/RESULT.md"
 # shellcheck source=kolnovel-redroid-v7-common.sh
 source scripts/kolnovel-redroid-v7-common.sh
 
+# tap_button_text $1=exact button text — taps ONLY a clickable
+# android.widget.Button with exactly this text.
+# HARNESS FIX (run 44478047693, proven): common.sh tap_text() taps the FIRST
+# node containing the text, which for the retry dialog is the NON-CLICKABLE
+# message TextView ("...يمكنك إعادة المحاولة الآن.", bounds [59,520][673,688])
+# — 31 taps landed on the message, the dialog never dismissed, no retry ever
+# started, logcat showed zero app activity after the kill. The real button is
+# android.widget.Button clickable=true bounds [35,720][362,816]. This helper
+# refuses any non-Button / non-clickable node, so a tap that "sends" really
+# presses the button.
+tap_button_text() {
+  local needle="$1" f="artifacts/ui-current.xml"
+  adb -s "$DEV" shell uiautomator dump /sdcard/ui-current.xml 2>/dev/null
+  adb -s "$DEV" pull /sdcard/ui-current.xml "$f" 2>/dev/null
+  local bounds
+  bounds=$(python3 - "$f" "$needle" <<'PYEOF'
+import sys, re, xml.etree.ElementTree as ET
+f, needle = sys.argv[1], sys.argv[2]
+try: root = ET.parse(f).getroot()
+except Exception: sys.exit(1)
+for node in root.iter('node'):
+    t = (node.get('text') or '').strip()
+    if t == needle and node.get('class') == 'android.widget.Button' and node.get('clickable') == 'true':
+        b = node.get('bounds') or ''
+        m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', b)
+        if m:
+            x1,y1,x2,y2 = map(int, m.groups())
+            print((x1+x2)//2, (y1+y2)//2); sys.exit(0)
+sys.exit(1)
+PYEOF
+)
+  [ -n "$bounds" ] || return 1
+  echo "tap_button_text: tapping Button '$needle' at $bounds"
+  adb -s "$DEV" shell input tap $bounds 2>&1
+  return 0
+}
+
 echo "== host =="
 uname -m; nproc; free -h | head -2
 sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils 2>&1 | tail -2 || echo "poppler install FAILED"
@@ -135,7 +172,7 @@ RETRY_VERDICT="FAIL"
 if [ "$ALIVE" = "YES" ] && [ "$DIALOG_TITLE" = "1" ] && [ "$DIALOG_BTN" = "1" ]; then
   echo "== tapping 'إعادة المحاولة' =="
   # Re-dump fresh UI before tapping (the 45s dump is current).
-  if tap_text "إعادة المحاولة"; then
+  if tap_button_text "إعادة المحاولة"; then
     echo "retry tap sent" | tee -a "$RESULT"
     sleep 5
     snap "retry-aftertap"; dump_ui "retry-aftertap"
@@ -150,7 +187,7 @@ if [ "$ALIVE" = "YES" ] && [ "$DIALOG_TITLE" = "1" ] && [ "$DIALOG_BTN" = "1" ];
       dump_ui "retry-wait-$w" >/dev/null 2>&1
       if grep -qi "إعادة المحاولة" "artifacts/ui-retry-wait-$w.xml" 2>/dev/null; then
         echo "  retry dialog appeared AGAIN at wait $w — tapping once more"
-        tap_text "إعادة المحاولة" || true
+        tap_button_text "إعادة المحاولة" || true
         sleep 5
         continue
       fi

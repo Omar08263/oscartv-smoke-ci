@@ -18,6 +18,11 @@
 # Harness fixes carried from parts3.sh: stale part PDF deleted before each
 # attempt (same filename broke new_pdf detection); FILE-GONE early stop in
 # the stable pull; logcat snapshots every 2 min during the wait.
+# HARNESS FIX 2 (run 44478047693, proven): seen-pdfs.txt is cleared per
+# attempt — the previous attempt's identical filename hid the new file from
+# new_pdf() (p3a2: file opened +55s, print dialog at +224s, loop never saw
+# the file). FILE-GONE branch also checks for the system print dialog so a
+# layout-timeout fallback keeps its PRINT-DIALOG-FALLBACK verdict.
 set -u
 mkdir -p artifacts
 exec > >(tee artifacts/run.log) 2>&1
@@ -60,6 +65,12 @@ export_part() {
   echo "########## PART $n (chapters $lo-$hi) attempt $atag ##########"
   # Stale part PDF deleted first so new_pdf detection works for this attempt.
   adb -s "$DEV" shell "rm -f '/sdcard/Download/Kolnovel/Kolnovel - القس المجنون - Part $n.pdf'" 2>&1 || true
+  # HARNESS FIX (run 44478047693, proven): the previous attempt's path stays
+  # in seen-pdfs.txt, and the part filename is identical across attempts, so
+  # new_pdf() hid a2's file even when it existed (a2: file opened 07:20:47,
+  # print dialog at 07:23:16 — the wait loop never saw the file). Each
+  # attempt is independent: clear the seen list per attempt.
+  : > artifacts/seen-pdfs.txt
   cold_relaunch
   adb -s "$DEV" logcat -c 2>&1 || true
   adb -s "$DEV" shell am start -a android.intent.action.VIEW -d "kexport://38916" 2>&1 | tee "artifacts/$tag-deeplink.log" || true
@@ -169,6 +180,15 @@ export_part() {
         alive && echo "$tag app_alive_after_timeout_dialog=YES" | tee -a "$RESULT" || echo "$tag app_alive_after_timeout_dialog=NO" | tee -a "$RESULT"
         echo "--- timeout markers in filegone logcat ---" | tee -a "$RESULT"
         grep -i -m 10 "onWrite\|awaitLatch\|offerRetryAfterTimeout\|printing is already\|FATAL EXCEPTION\|onRenderProcessGone" "artifacts/logcat-$tag-filegone.txt" 2>/dev/null | tee -a "$RESULT" || echo "(none)" | tee -a "$RESULT"
+      elif grep -qiE "Select a printer" "artifacts/ui-$tag-filegone.xml" 2>/dev/null; then
+        # The file existed (print started) then was deleted by tryAutoSave's
+        # finally after a pre-onWrite failure, and the run fell through to
+        # the system print dialog (layout-timeout fallback, run 44478047693
+        # p3a2: file opened +55s, print dialog "1/8168" at +224s). Record
+        # the fallback, not a bare FILE-GONE, so the evidence class survives.
+        PART_VERDICT="PRINT-DIALOG-FALLBACK (file created then deleted mid-attempt; system print dialog shown)"
+        echo "$tag=$PART_VERDICT" | tee -a "$RESULT"
+        alive && echo "$tag app_alive_after_print_dialog=YES" | tee -a "$RESULT" || echo "$tag app_alive_after_print_dialog=NO" | tee -a "$RESULT"
       else
         PART_VERDICT="FILE-GONE (PDF created at 0 bytes, then deleted mid-print, no dialog)"
         echo "$tag=$PART_VERDICT" | tee -a "$RESULT"
