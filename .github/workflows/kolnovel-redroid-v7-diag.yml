@@ -1,0 +1,62 @@
+name: kolnovel-redroid-v7-diag
+# Kolnovel v7 DIAG — broad stability sweep of v6 (v6c) on Redroid + parts 2-5
+# + auto-save on API 34. Diagnosis ONLY: no APK is built or modified here.
+# Omar's complaint (2026-11-19): the app has many problems, crashes fast,
+# and the PDF-export button is missing.
+# Jobs:
+#  diag  — UI sweep: install/launch/home, Library tab, search + open 38916,
+#          export-button visibility (top vs after scroll), chapter 1 reader,
+#          settings, export button x3, second novel 76237 (visibility + export x1).
+#  parts — export parts 2-5 of novel 38916 (2,355 ch) via kexport://38916,
+#          pull each PDF and verify it (pages, sequential headings, Cairo
+#          only, 0 U+FFFD). Independent verdict per part.
+#  api34 — one export of 76237 on Redroid 14 (SDK 34): auto-save writes the
+#          PDF (direct `new` works on 34) or the print dialog appears
+#          (fallback works). Fails honestly if no API 34 image boots.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v7-diag.yml'
+      - 'scripts/kolnovel-redroid-v7-diag.sh'
+      - 'scripts/kolnovel-redroid-v7-parts.sh'
+      - 'scripts/kolnovel-redroid-v7-api34.sh'
+      - 'app/Kolnovel-v5.2.5-premium-v6.apk'
+  workflow_dispatch:
+jobs:
+  diag:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid v7 diag — stability sweep (v6)
+        run: bash scripts/kolnovel-redroid-v7-diag.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-redroid-v7-diag-artifacts
+          path: artifacts/
+  parts:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid v7 diag — parts 2-5 of novel 38916
+        run: bash scripts/kolnovel-redroid-v7-parts.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-redroid-v7-parts-artifacts
+          path: artifacts/
+  api34:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid v7 diag — auto-save on API 34
+        run: bash scripts/kolnovel-redroid-v7-api34.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-redroid-v7-api34-artifacts
+          path: artifacts/
