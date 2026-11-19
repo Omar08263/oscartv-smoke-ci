@@ -1,0 +1,121 @@
+name: kolnovel-redroid-v8.3-verify
+# Kolnovel v8.3 FULL VERIFICATION on Redroid (ubuntu-24.04-arm only).
+# v8.3 changes vs v8.2 (see BUILD-V8.3.md): BrowseScreen crash FIX —
+# (D1) defensive guard in F27786 (page => page.data) so an undefined page
+# contributes 0 items instead of killing render; (R1) placeholderData only
+# wraps a cached value with Array.isArray(cached.data); (R2) StaleCache-
+# FallbackError branch in F33588 re-throws instead of returning
+# fallback.data unchecked; (R3) F32081:0063 throws resolved instead of
+# returning resolved.data unchecked. Export code byte-identical to v8.2.
+# Parts job exports ONLY part 5 (1001-1250, v8.2 ref 7,324 pp = Chrome
+# oracle); api34/retry export 76237 part 1 (1-250).
+# Harness fixes vs v8.2 (VERIFY-V8.2 §8, mandatory): (a) allnovels captures
+# logcat-final BEFORE any logcat -c; (b) LOADED gate before the 60 s watch —
+# death at open is reported as "died at open", never "crash in watch";
+# (c) heading-count bound relaxed to 0.90x..+25% (translator numbers +
+# in-text «الفصل» lines; decisive check is sequence vs Chrome oracle);
+# (d) font verdict is size 21 + family Cairo (pdftohtml reports
+# AAAAAA+Cairo, never Cairo-Bold).
+# 5 parallel jobs, one per verification area:
+#   parts    — (C) ONLY part 5 (1001-1250, v8.2 ref 7,324 pp = Chrome
+#              oracle, write ~100 s) on v8.3, via kexport://38916.
+#              Part picker must show 10 parts for 38916. Record real
+#              page count + write time; PDFs get the v8.3 reference-spec
+#              checks (Letter / 21pt / margins / no TOC / zero rights).
+#   allnovels— (A+B) «تصفح الكل» -> 279/279 scroll-counted, 0 duplicates
+#              (per-dump dup check), last title «مدجج بالعتاد» reachable,
+#              latest-first order vs live /discover?sort=latest, 60 s
+#              post-load watch for FATAL/hasMore, in-screen search finds
+#              «القس المجنون» (38916), tap -> detail + export button + tap
+#              starts PdfExportActivity.
+#   retry    — (D2) renderer kill at print start (76237 part 1) ->
+#              Arabic retry dialog -> real Button tap -> re-export
+#              completes, PDF verified (1-250).
+#   api34    — (D1) 76237 part 1 (1-250) on Redroid 14 (SDK 34 confirmed);
+#              picker must show 2 parts.
+#   coldopen — (A1+A2) 12 cold detail-opens of 38916 (12/12, no crash),
+#              button visible at top 12/12, first 3 taps start
+#              PdfExportActivity 3/3. This also re-opens BrowseScreen
+#              12x — the v8.1 crash site.
+# Harness fixes vs v7.2 (see VERIFY-V7.2.md): seen-pdfs cleared AND all
+# old PDFs in Download/Kolnovel/ deleted before every attempt
+# (delete_old_pdfs); retry Button tapped by class+clickable only; the
+# killed partial PDF is deleted before the retry wait loop.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v8.3-verify.yml'
+      - 'scripts/kolnovel-redroid-v8.3-common.sh'
+      - 'scripts/kolnovel-redroid-v8.3-verify-parts.sh'
+      - 'scripts/kolnovel-redroid-v8.3-verify-allnovels.sh'
+      - 'scripts/kolnovel-redroid-v8.3-verify-retry.sh'
+      - 'scripts/kolnovel-redroid-v8.3-verify-api34.sh'
+      - 'scripts/kolnovel-redroid-v8.3-verify-coldopen.sh'
+      - 'scripts/kolnovel-v8-titles.txt'
+      - 'app/Kolnovel-v5.2.5-premium-v8.3.apk'
+  workflow_dispatch:
+env:
+  V8_APK: app/Kolnovel-v5.2.5-premium-v8.3.apk
+  V8_SHA: f75c7aa8aa8e2b428b468fc00b11b154ebc849e974362b9bfc484e2d20869174
+jobs:
+  parts:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - name: Part 3 decisive + Part 2 regression + PDF-spec checks on v8
+        run: bash scripts/kolnovel-redroid-v8.3-verify-parts.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.3-verify-parts
+          path: artifacts/
+  allnovels:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Browse-All screen (279) + search + detail + export on v8
+        run: bash scripts/kolnovel-redroid-v8.3-verify-allnovels.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.3-verify-allnovels
+          path: artifacts/
+  retry:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Renderer-death retry dialog proof on v8
+        run: bash scripts/kolnovel-redroid-v8.3-verify-retry.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.3-verify-retry
+          path: artifacts/
+  api34:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: API 34 auto-save on v8
+        run: bash scripts/kolnovel-redroid-v8.3-verify-api34.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.3-verify-api34
+          path: artifacts/
+  coldopen:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: 12 cold detail-opens + button + 3 taps on v8
+        run: bash scripts/kolnovel-redroid-v8.3-verify-coldopen.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.3-verify-coldopen
+          path: artifacts/
