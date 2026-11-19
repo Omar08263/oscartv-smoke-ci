@@ -1,0 +1,87 @@
+name: kolnovel-redroid-v8.6-diag
+# Kolnovel v8.6 DIAGNOSTIC round (NO rebuild — tests v8.6 itself).
+# Answers VERIFY-V8.6 §9 with live evidence instead of another patch:
+#   (A) coldopen-clear — 12 cold detail-opens with `adb shell pm clear
+#       com.benabdellah.KolNovelApp` BEFORE EVERY attempt (fresh state each
+#       time). If opens become 12/12, the native crashes come from a
+#       poisoned OLD CACHE read before the P1-P5 guards (cache GUILTY);
+#       if they stay ~8/12, the cache is EXONERATED — the fault is made
+#       fresh inside the session itself.
+#   (B) allnovels-diag — Browse-All AFTER `pm clear`, plus FULL unfiltered
+#       logcat: `logcat -c` right before tapping «تصفح الكل», then full
+#       `logcat -d` dumps at load polls 2/6/12, at the error card, and
+#       after retry. Either the JS error line is finally captured verbatim,
+#       or its absence in the FULL buffer is proven (4th straight round
+#       with 0 ReactNativeJS lines would then be a proven absence, not a
+#       grep miss). Also answers whether the list loads after a wipe.
+#   (C) parts-control — ONE control export, part 5 (1001-1250, ref 7,324
+#       pp = Chrome oracle), reusing the v8.6 verify parts script
+#       unchanged, to confirm the install/APK itself is sound.
+# Harness-only changes (this workflow + the two diag scripts); the APK
+# is the v8.6 one already in the repo — NO rebuild, NO APK change.
+# Also includes the VERIFY-V8.6 §8 cosmetic harness fix: the PC-aggregate
+# counter now uses `pc 0*[0-9a-f]+` (tombstones write the pc with NO 0x
+# prefix: `pc 000000000064b178`).
+# 3 parallel jobs (one workflow, one push). Runs on ubuntu-24.04-arm only.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v8.6-diag.yml'
+      - 'scripts/kolnovel-redroid-v8.6-diag-coldopen-clear.sh'
+      - 'scripts/kolnovel-redroid-v8.6-diag-allnovels.sh'
+      - 'scripts/kolnovel-redroid-v8.6-verify-parts.sh'
+      - 'scripts/kolnovel-redroid-v8.6-common.sh'
+      - 'scripts/kolnovel-v8-titles.txt'
+  workflow_dispatch:
+env:
+  V8_SHA: 88128a2c2a0317cfc11ecfe1147e60afb7f8aeb50c1a355f756fbefe3535fc2b
+jobs:
+  coldopen-clear:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      V8_APK: app/Kolnovel-v5.2.5-premium-v8.6.apk
+      V8_SHA: 88128a2c2a0317cfc11ecfe1147e60afb7f8aeb50c1a355f756fbefe3535fc2b
+      VARIANT: v8.6-diag-clear
+    steps:
+      - uses: actions/checkout@v4
+      - name: DIAG (A) 12 cold opens, pm clear before each
+        run: bash scripts/kolnovel-redroid-v8.6-diag-coldopen-clear.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.6-diag-coldopen-clear
+          path: artifacts/
+  allnovels-diag:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      V8_APK: app/Kolnovel-v5.2.5-premium-v8.6.apk
+      V8_SHA: 88128a2c2a0317cfc11ecfe1147e60afb7f8aeb50c1a355f756fbefe3535fc2b
+      VARIANT: v8.6-diag-all
+    steps:
+      - uses: actions/checkout@v4
+      - name: DIAG (B) Browse-All after pm clear + full unfiltered logcat
+        run: bash scripts/kolnovel-redroid-v8.6-diag-allnovels.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.6-diag-allnovels
+          path: artifacts/
+  parts-control:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    env:
+      V8_APK: app/Kolnovel-v5.2.5-premium-v8.6.apk
+      V8_SHA: 88128a2c2a0317cfc11ecfe1147e60afb7f8aeb50c1a355f756fbefe3535fc2b
+      VARIANT: v8.6
+    steps:
+      - uses: actions/checkout@v4
+      - name: DIAG (C) control export part 5 only
+        run: bash scripts/kolnovel-redroid-v8.6-verify-parts.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.6-diag-parts
+          path: artifacts/
