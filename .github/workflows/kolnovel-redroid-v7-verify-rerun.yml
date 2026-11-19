@@ -1,0 +1,55 @@
+name: kolnovel-redroid-v7-verify-rerun
+# Kolnovel v7 VERIFY — rerun round (follow-up to run 44466265799).
+#   retry2 — item 5 round 2: poll-based renderer kill (round 1 was NOT-PROVEN:
+#            the 76237 export finished before the fixed +55s kill)
+#   wide2  — item 6 round 2: fixed tab label ("مكتبة") + scroll to chapters
+#            before tapping chapter 1 (round 1 never reached a chapter row)
+#   parts3 — item 4 follow-up: Part 3 THIRD attempt (a1/a2 failed in two
+#            different print-phase modes; a2 died with a NEW FATAL
+#            "printing is already pending")
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v7-verify-rerun.yml'
+      - 'scripts/kolnovel-redroid-v7-verify-retry2.sh'
+      - 'scripts/kolnovel-redroid-v7-verify-wide2.sh'
+      - 'scripts/kolnovel-redroid-v7-verify-parts3.sh'
+  workflow_dispatch:
+jobs:
+  retry2:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Renderer-death retry dialog proof (round 2, poll-based kill)
+        run: bash scripts/kolnovel-redroid-v7-verify-retry2.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v7-verify-retry2
+          path: artifacts/
+  wide2:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Broad sweep round 2 (fixed labels + chapter scroll)
+        run: bash scripts/kolnovel-redroid-v7-verify-wide2.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v7-verify-wide2
+          path: artifacts/
+  parts3:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Part 3 third attempt
+        run: bash scripts/kolnovel-redroid-v7-verify-parts3.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v7-verify-parts3
+          path: artifacts/
