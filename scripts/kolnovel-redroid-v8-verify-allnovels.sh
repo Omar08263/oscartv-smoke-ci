@@ -93,8 +93,12 @@ for i in $(seq 1 18); do
   dump_ui "all-wait-$i" >/dev/null 2>&1
   out=$(extract_seen_titles "artifacts/ui-all-wait-$i.xml")
   echo "  load poll $i: $out"
-  if grep -q "منظور قارئ كلي العلم\|القس المجنون" "artifacts/allnovels-seen.txt" 2>/dev/null; then
-    LOADED=1; echo "all-mode list LOADED (poll $i)" | tee -a "$RESULT"; break
+  # LOADED = any snapshot title visible: the first screen shows the most
+  # recently updated novels (sort latest_updated), not the snapshot's
+  # first title — demanding a specific title failed a loaded list.
+  total_now=$(echo "$out" | sed -n 's/.*total:\([0-9]*\).*/\1/p')
+  if [ "${total_now:-0}" -ge 1 ] 2>/dev/null; then
+    LOADED=1; echo "all-mode list LOADED (poll $i, $total_now snapshot titles on first screen)" | tee -a "$RESULT"; break
   fi
   sleep 10
 done
@@ -116,9 +120,9 @@ echo "== scroll-count the full list =="
 # Re-seed from the load polls (they were counted before the reset above).
 for f in artifacts/ui-all-wait-*.xml; do extract_seen_titles "$f" >/dev/null 2>&1; done
 LAST_SEEN=0; NO_NEW=0; SCROLLS=0
-for i in $(seq 1 80); do
+for i in $(seq 1 160); do
   SCROLLS=$i
-  adb -s "$DEV" shell input swipe 360 1000 360 300 300 2>&1 || true
+  adb -s "$DEV" shell input swipe 360 1100 360 200 300 2>&1 || true
   sleep 3
   dump_ui "all-scroll-$i" >/dev/null 2>&1
   out=$(extract_seen_titles "artifacts/ui-all-scroll-$i.xml")
@@ -155,11 +159,11 @@ cp artifacts/allnovels-seen.txt artifacts/allnovels-seen-final.txt 2>/dev/null |
 
 echo "== in-screen search for Reverend =="
 # Scroll back to top first (many swipes up), then find the search field.
-for _ in $(seq 1 12); do adb -s "$DEV" shell input swipe 360 300 360 1000 300 2>&1 || true; sleep 1; done
+for _ in $(seq 1 40); do adb -s "$DEV" shell input swipe 360 200 360 1100 300 2>&1 || true; sleep 1; done
 sleep 3
 dump_ui "all-top"; snap "all-top"
 SEARCH_OK=0
-for needle in "البحث عن رواية" "بحث" "ابحث"; do
+for needle in "فتح البحث" "البحث عن رواية" "بحث" "ابحث"; do
   if tap_text "$needle"; then
     echo "search field tapped via '$needle'" | tee -a "$RESULT"
     SEARCH_OK=1; break

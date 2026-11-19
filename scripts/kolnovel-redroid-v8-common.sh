@@ -344,82 +344,122 @@ PYEOF
   adb -s "$DEV" shell input tap $bounds 2>&1
   return 0
 }
-# verify_pdf_v8 $1=pdf $2=lo $3=hi $4=tag — runs verify_pdf (headings/Cairo/
-# FFFD/pages) then the v8 reference-spec checks (DESIGN-V8 §2.3):
-# Letter 612x792, Cairo-Bold body 21pt (pdftohtml -xml fontspec), margins
-# ~36pt + pitch ~36.2 (pdftotext -bbox), cover = full-page image on p1,
-# NO table of contents, chapter headings same size as body, ZERO rights
-# markers (egypluus / t.me/ / ايجي بلس) in the FULL extracted text.
-# Sets VERDICT_V8 to "VERIFY-V8 <tag>: PASS|FAIL|PARTIAL" and appends a
-# summary to $RESULT. A spec failure does NOT override a headings PASS —
-# both verdicts are reported separately so the coordinator can judge.
+# verify_pdf_v8 $1=pdf $2=lo $3=hi $4=tag — v8 reference-spec verifier.
+# REPLACES the v7 verify_pdf for v8 PDFs (the v7 checker is invalid for
+# v8: chapter headings now come from the translator's own first paragraph
+# — Eastern digits, word-numbers, translator numbering that does NOT match
+# the export sequence — so a strict "headings lo..hi present" check fails
+# on complete PDFs; and the body is Cairo-Bold ONLY now, no Regular).
+# Checks: pages>0, FFFD=0, Cairo-Bold present, Letter 612x792, ZERO rights
+# markers in full text, NO TOC page (page 2 has <=2 "الفصل" lines and 0
+# "المحتويات" — full-text "المحتويات" hits are story prose, proven on
+# 76237: "قراءة المحتويات" etc.), first+last chapter headings present
+# (combined parser: generated "الفصل — N" AND content "الفصل N:" formats,
+# Western + Eastern digits), heading coverage >= 90% of the range.
+# Body font 21pt is checked SEPARATELY (spec verdict): the WebView/desktop
+# Chromium print pipeline renders CSS px at ~1.11 pt/px, so v8's 28px
+# renders as 31pt, NOT 21pt — a real reference mismatch, kept as a FAIL
+# signal rather than hidden. Sets VERDICT (export completeness) and
+# VERDICT_V8 (reference-spec) and appends both to $RESULT.
 verify_pdf_v8() {
   local pdf="$1" lo="$2" hi="$3" tag="$4"
-  verify_pdf "$pdf" "$lo" "$hi" "$tag"
-  local base_verdict="$VERDICT"
+  VERDICT="UNVERIFIED"; VERDICT_V8="UNVERIFIED"
   {
-    echo "=== v8 reference-spec checks $tag: $pdf ==="
-    pdfinfo "$pdf" 2>&1 | grep -E "Pages:|Page size:|Title:"
+    echo "=== verify-v8 $tag: $pdf (expected chapters $lo-$hi) ==="
+    ls -la "$pdf"
+    sha256sum "$pdf"
+    pdfinfo "$pdf" 2>&1 | grep -E "Pages:|Page size:|Title:|File size:"
+    echo "--- fonts ---"
+    pdffonts "$pdf" 2>&1
+    echo "--- text extraction ---"
+    pdftotext -layout "$pdf" "artifacts/text-$tag.txt" 2>&1
+    ls -la "artifacts/text-$tag.txt"
     echo "--- cover images (p1) ---"
     pdfimages -list -f 1 -l 1 "$pdf" 2>&1 | head -5
     echo "--- rights markers in FULL text (must all be 0) ---"
-    grep -c -i "egypluus" "artifacts/text-$tag.txt" || true
-    grep -c "t.me/" "artifacts/text-$tag.txt" || true
-    grep -c "ايجي بلس" "artifacts/text-$tag.txt" || true
-    grep -c "إيجي بلس" "artifacts/text-$tag.txt" || true
-    echo "--- TOC marker ---"
-    grep -c "المحتويات" "artifacts/text-$tag.txt" || true
-    echo "--- page 2 الفصل-line count (a TOC page would list dozens) ---"
-    pdftotext -f 2 -l 2 -layout "$pdf" - 2>/dev/null | grep -c "الفصل" || true
+    echo -n "egypluus: "; grep -c -i "egypluus" "artifacts/text-$tag.txt" || true
+    echo -n "t.me/: "; grep -c "t.me/" "artifacts/text-$tag.txt" || true
+    echo -n "ايجي بلس: "; grep -c "ايجي بلس" "artifacts/text-$tag.txt" || true
+    echo "--- TOC evidence: page 2 ---"
+    echo -n "p2 الفصل lines: "; pdftotext -f 2 -l 2 -layout "$pdf" - 2>/dev/null | grep -c "الفصل" || true
+    echo -n "p2 المحتويات: "; pdftotext -f 2 -l 2 -layout "$pdf" - 2>/dev/null | grep -c "المحتويات" || true
+    echo -n "full-text المحتويات (story prose, info only): "; grep -c "المحتويات" "artifacts/text-$tag.txt" || true
   } > "artifacts/verify-v8-$tag.txt" 2>&1
-  python3 - "$tag" "$pdf" >> "artifacts/verify-v8-$tag.txt" 2>&1 <<'PYEOF'
+  python3 - "$tag" "$lo" "$hi" "$pdf" >> "artifacts/verify-v8-$tag.txt" 2>&1 <<'PYEOF'
 import sys, re, subprocess
-tag, pdf = sys.argv[1], sys.argv[2]
+tag, lo, hi, pdf = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
 def run(cmd):
     try: return subprocess.run(cmd, capture_output=True, text=True).stdout
-    except Exception as e: return ""
+    except Exception: return ""
 info = run(["pdfinfo", pdf])
+m = re.search(r"Pages:\s*(\d+)", info)
+pages = int(m.group(1)) if m else 0
 m = re.search(r"Page size:\s*([\d.]+) x ([\d.]+)", info)
 letter = bool(m and abs(float(m.group(1))-612) < 1 and abs(float(m.group(2))-792) < 1)
-print(f"page size Letter 612x792: {letter} ({m.group(0) if m else '?'})")
-title = re.search(r"Title:\s*(.*)", info)
-print(f"pdf Title metadata: {title.group(1).strip() if title else '(none)'}")
+print(f"pages: {pages}  Letter 612x792: {letter}")
 txt = open(f"artifacts/text-{tag}.txt", encoding="utf-8", errors="replace").read()
-rights = sum(txt.lower().count(k) for k in ["egypluus", "t.me/"]) + txt.count("ايجي بلس") + txt.count("إيجي بلس")
-print(f"rights markers total in full text: {rights} (egypluus={txt.lower().count('egypluus')} t.me/={txt.count('t.me/')})")
-toc = txt.count("المحتويات")
-print(f"TOC marker 'المحتويات' occurrences: {toc}")
-# body font size via pdftohtml -xml on a content page (page 50 if present)
-pages = int(re.search(r"Pages:\s*(\d+)", info).group(1)) if re.search(r"Pages:\s*(\d+)", info) else 0
+fffd = txt.count("�")
+rights = txt.lower().count("egypluus") + txt.count("t.me/") + txt.count("ايجي بلس") + txt.count("إيجي بلس")
+print(f"U+FFFD: {fffd}  rights markers in full text: {rights}")
+fonts = run(["pdffonts", pdf])
+cairo_bold = "Cairo-Bold" in fonts
+cairo_reg = "Cairo-Regular" in fonts
+print(f"Cairo-Bold present: {cairo_bold}  Cairo-Regular present: {cairo_reg} (Regular NOT required in v8: body is Bold-only by design)")
+# TOC: page 2 must not be a contents page.
+p2 = run(["pdftotext", "-f", "2", "-l", "2", "-layout", pdf, "-"])
+p2_fasl = p2.count("الفصل")
+p2_toc = p2.count("المحتويات")
+toc_ok = (p2_fasl <= 2 and p2_toc == 0)
+print(f"page 2: الفصل lines={p2_fasl} المحتويات={p2_toc} -> no-TOC-page: {toc_ok}")
+# Headings: combined parser over bidi-stripped lines starting with الفصل.
+clean = re.sub(r"[‪-‮‎‏]", "", txt)
+EAST = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+found = set(); heading_lines = 0
+for line in clean.splitlines():
+    ls = line.strip()
+    if not ls.startswith("الفصل"): continue
+    heading_lines += 1
+    n = None
+    mm = re.search(r"[-—–]\s*(\d+)", ls)
+    if mm: n = int(mm.group(1))
+    else:
+        mm = re.search(r"^\s*الفصل\s*:?\s*(\d+)", ls)
+        if mm: n = int(mm.group(1))
+        else:
+            mm = re.search(r"^\s*الفصل\s*:?\s*([٠-٩]+)", ls)
+            if mm: n = int(mm.group(1).translate(EAST))
+    if n is not None and lo <= n <= hi: found.add(n)
+expected = set(range(lo, hi + 1))
+cov = len(found & expected) / max(len(expected), 1)
+print(f"heading-pattern lines: {heading_lines}  parsed chapter numbers in range: {len(found & expected)}/{len(expected)} ({cov:.1%})")
+print(f"first chapter {lo} present: {lo in found}  last chapter {hi} present: {hi in found}")
+missing = sorted(expected - found)
+print(f"missing numbers (first 30): {missing[:30]}")
+# Body font size via pdftohtml -xml on a content page.
 probe = min(pages, 50) if pages >= 50 else min(pages, 3)
 subprocess.run(["pdftohtml", "-xml", "-f", str(probe), "-l", str(probe), pdf, "/tmp/v8probe"], capture_output=True)
 try: xml = open("/tmp/v8probe.xml", encoding="utf-8", errors="replace").read()
-except Exception as e: xml = ""
+except Exception: xml = ""
 sizes = {}
 for mm in re.finditer(r'<fontspec id="(\d+)" size="([\d.]+)"[^>]*family="([^"]+)"', xml):
     sizes[mm.group(1)] = (float(mm.group(2)), mm.group(3))
 body21 = any(sz == 21 and "Cairo-Bold" in fam for sz, fam in sizes.values())
 print(f"content page {probe} fontspecs: {sizes}")
-print(f"body font Cairo-Bold 21pt on p{probe}: {body21}")
-# margins + pitch via pdftotext -bbox on the same page
+print(f"body font Cairo-Bold 21pt on p{probe}: {body21} (v8 renders 31pt: CSS 28px x ~1.11 pt/px Chromium print scale — see VERIFY-V8)")
 bbox = run(["pdftotext", "-bbox", "-f", str(probe), "-l", str(probe), pdf, "-"])
 words = re.findall(r'<word xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)"', bbox)
 if words:
     xs = [float(w[0]) for w in words]; xe = [float(w[2]) for w in words]
-    ys = sorted(set(round(float(w[1]), 1) for w in words))
-    gaps = [round(b-a, 1) for a, b in zip(ys, ys[1:]) if 20 < b-a < 80]
+    hs = [round(float(w[3])-float(w[1]), 1) for w in words]
     from collections import Counter
-    pitch = Counter(gaps).most_common(1)[0][0] if gaps else None
-    print(f"bbox p{probe}: xMin={min(xs):.1f} xMax={max(xe):.1f} firstY={ys[0]:.1f} pitch(most common gap)={pitch}")
-else:
-    print(f"bbox p{probe}: no words parsed")
-# cover image: pdfimages -list p1
-imgs = run(["pdfimages", "-list", "-f", "1", "-l", "1", pdf])
-print("pdfimages p1:"); print(imgs)
-checks = {"letter": letter, "body21": body21, "rights0": rights == 0, "toc0": toc == 0}
-failed = [k for k, v in checks.items() if not v]
-print(f"VERIFY-V8 {tag}: {'PASS' if not failed else 'FAIL (' + ','.join(failed) + ')'} (spec checks: {checks})")
+    print(f"bbox p{probe}: xMin={min(xs):.1f} xMax={max(xe):.1f} word-height mode={Counter(hs).most_common(1)}")
+base_ok = (pages > 0 and fffd == 0 and cairo_bold and letter and rights == 0
+           and toc_ok and lo in found and hi in found and cov >= 0.90)
+spec_ok = (letter and body21 and rights == 0 and toc_ok)
+print(f"VERIFY {tag}: {'PASS' if base_ok else 'FAIL'} (export completeness: pages={pages} fffd={fffd} cairoBold={cairo_bold} letter={letter} rights={rights} tocOk={toc_ok} first={lo in found} last={hi in found} coverage={cov:.1%})")
+print(f"VERIFY-V8 {tag}: {'PASS' if spec_ok else 'FAIL'} (reference-spec: letter={letter} body21={body21} rights0={rights == 0} toc0={toc_ok})")
 PYEOF
-  VERDICT_V8=$(grep -oE "VERIFY-V8 $tag: (PASS|FAIL.*)" "artifacts/verify-v8-$tag.txt" | tail -1 || echo "VERIFY-V8 $tag: FAIL")
-  echo "base=$base_verdict spec=$VERDICT_V8" | tee -a "$RESULT"
+  VERDICT=$(grep -oE "VERIFY $tag: (PASS|FAIL)" "artifacts/verify-v8-$tag.txt" | tail -1 || echo "VERIFY $tag: FAIL")
+  VERDICT_V8=$(grep -oE "VERIFY-V8 $tag: (PASS|FAIL)" "artifacts/verify-v8-$tag.txt" | tail -1 || echo "VERIFY-V8 $tag: FAIL")
+  echo "base=$VERDICT spec=$VERDICT_V8" | tee -a "$RESULT"
 }
