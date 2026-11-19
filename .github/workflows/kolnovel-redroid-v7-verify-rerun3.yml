@@ -1,0 +1,43 @@
+name: kolnovel-redroid-v7-verify-rerun3
+# Kolnovel v7 VERIFY — rerun round 3 (follow-up to runs 44466265799,
+# 44469996699, 44471458170).
+#   v6control — decide whether retry3's v7 death is a v7 regression or
+#            version-independent Chromium behavior: identical mid-print kill
+#            (PDF-appearance trigger) against the v6 APK. Verdict is only
+#            app_alive + FATAL type.
+#   wide4    — item 6 reader, round 4: tap the FIRST chapter row (no row is
+#            labelled «الفصل 1»; rows are volume-grouped «#0 · ...»), then
+#            download dialog -> «تحميل» -> tap again -> reader.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v7-verify-rerun3.yml'
+      - 'scripts/kolnovel-redroid-v7-verify-retry-v6control.sh'
+      - 'scripts/kolnovel-redroid-v7-verify-wide4.sh'
+  workflow_dispatch:
+jobs:
+  v6control:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: v6 control — identical mid-print kill on v6
+        run: bash scripts/kolnovel-redroid-v7-verify-retry-v6control.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v7-verify-v6control
+          path: artifacts/
+  wide4:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reader via first chapter row (download then open)
+        run: bash scripts/kolnovel-redroid-v7-verify-wide4.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v7-verify-wide4
+          path: artifacts/
