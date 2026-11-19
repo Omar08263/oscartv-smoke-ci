@@ -1,0 +1,165 @@
+name: kolnovel-redroid-v8.6-verify
+# Kolnovel v8.6 VERIFICATION on Redroid (ubuntu-24.04-arm only).
+# Single variant: v8.6 = v8.4 bundle + P1a/P1b/P2/P3/P4/P5 normalisation
+# (BUILD-V8.6.md). Handler tables byte-identical to v8.4 — untouched.
+# The v8.5 isolation answered its question (both variants crash -> the
+# fault is in the shared v8 base, not D1 alone nor R alone); v8.6 closes
+# every KNOWN reject/poison path through the suspect mechanism instead:
+#   P1a/P1b — L3498: latest resolves undefined/null or latest.data
+#             undefined/null -> return the 279 without merging.
+#   P2      — L3358: filter the merged 279, drop undefined/null items
+#             before storing.
+#   P3      — normal resume: resolved.data == undefined -> well-formed
+#             empty page instead of throwing resolved.
+#   P4      — F33588 L200: fallback.data undefined/null -> well-formed
+#             empty page instead of re-throwing the original error.
+#   P5      — latest-merge loop: skip undefined/null latest items instead
+#             of throwing on .id.
+# Two corrections to earlier reports (BUILD-V8.6 §2): the "L3498 ready
+# fix" (kind==1 -> L3702) was ALREADY applied in v8.2/v8.4 — what was
+# really missing was P1/P5 (fulfilment shape r0 / r0.data undefined);
+# L579 belongs to F33588, not F32081.
+# Bridge diagnosis (BUILD-V8.6 §4): no fetched item can reach render as
+# undefined/null through fetch code — every bad item throws before
+# render; resolved.data undefined is possible only via a corrupt cache
+# entry. P2/P5 close the merge defensively in depth. Call map explains
+# the cold-open crash on the NORMAL path: HOME also calls
+# querySeriesSearch via F33612 <- F32152.
+# INTENDED, REVERSIBLE UX TRADEOFF (BUILD-V8.6 §8(2)) — watch for it:
+# when fetch fails AND the cache is empty, the user now sees an EMPTY
+# LIST instead of an error card (TanStack error boundary unproven safe;
+# retry proven broken live). In verification distinguish:
+#   (a) list loads 279 = PASS;
+#   (b) empty list + app alive = the tradeoff firing (report as such,
+#       with the fetch status — was the fetch really failing?);
+#   (c) error card = the old behaviour.
+# 5 parallel jobs (one workflow, one push):
+#   coldopen  — 12 cold detail-opens of 38916 (THE decisive question).
+#   allnovels — Browse-All 279 screen: count, latest-first order vs live
+#               GET /discover?sort=latest, in-screen search for 38916,
+#               detail + export button + tap, 60 s post-load watch.
+#   parts     — (C) ONLY part 5 (1001-1250, ref 7,324 pp = Chrome oracle)
+#               on v8.6; export code untouched.
+#   api34     — (D1) 76237 part 1 (1-250) auto-save on v8.6, SDK 34.
+#   retry     — (D2) renderer kill at print start (76237 part 1) ->
+#               Arabic retry dialog -> real Button tap -> re-export.
+# Harness fixes vs v8.5 (VERIFY-V8.5 §8, MANDATORY in v8.6):
+#   (a) coldopen PC counter: the -A 12 grep window returned empty in
+#       v8.5 (the #00 pc lines sit ~30 lines down the tombstone) — PCs
+#       are now extracted per failed logcat with a -A 80 window straight
+#       from the tombstone backtrace, plus aggregate counts.
+#   (b) allnovels verdict checks alive() BEFORE "DIED AT OPEN" (kept
+#       from v8.5) AND now distinguishes the v8.6 empty-list tradeoff:
+#       alive + «الروايات» screen + 0 titles + NO error card =
+#       TRADEOFF-EMPTY-LIST (with fetch-status evidence), not a death
+#       and not the old LOAD-ERROR.
+#   (c) every Fatal signal is counted, not SIGSEGV only (kept from v8.5).
+# All other harness lessons carry over from v8.5 (see that workflow):
+# print dialog "Select a printer"; SAF save tap text="SAVE"; spooler
+# creates the PDF at size 0 first — pull only when non-zero and stable
+# across two 10 s-apart polls (up to 180 s); Latin search ("Reverend");
+# detail proven via «المحتوى» tab; retry tap hits the clickable Button,
+# not the message text; seen-pdfs cleared AND all old PDFs in
+# Download/Kolnovel/ deleted before every attempt; close the keyboard
+# (Back key) before tapping any search result; logcat-final captured
+# directly for allnovels; titles carry translator numbers — compare
+# heading SEQUENCE vs the Chrome oracle, never literal numbers or a
+# 250±10 bound; font verdict is size 21 + family Cairo (pdftohtml
+# reports AAAAAA+Cairo, never Cairo-Bold).
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v8.6-verify.yml'
+      - 'scripts/kolnovel-redroid-v8.6-common.sh'
+      - 'scripts/kolnovel-redroid-v8.6-verify-parts.sh'
+      - 'scripts/kolnovel-redroid-v8.6-verify-allnovels.sh'
+      - 'scripts/kolnovel-redroid-v8.6-verify-api34.sh'
+      - 'scripts/kolnovel-redroid-v8.6-verify-coldopen.sh'
+      - 'scripts/kolnovel-redroid-v8.6-verify-retry.sh'
+      - 'scripts/kolnovel-v8-titles.txt'
+      - 'app/Kolnovel-v5.2.5-premium-v8.6.apk'
+  workflow_dispatch:
+env:
+  V8_SHA: 88128a2c2a0317cfc11ecfe1147e60afb7f8aeb50c1a355f756fbefe3535fc2b
+jobs:
+  coldopen:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      V8_APK: app/Kolnovel-v5.2.5-premium-v8.6.apk
+      V8_SHA: 88128a2c2a0317cfc11ecfe1147e60afb7f8aeb50c1a355f756fbefe3535fc2b
+      VARIANT: v8.6
+    steps:
+      - uses: actions/checkout@v4
+      - name: 12 cold detail-opens + button + 3 taps on v8.6
+        run: bash scripts/kolnovel-redroid-v8.6-verify-coldopen.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.6-verify-coldopen
+          path: artifacts/
+  allnovels:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      V8_APK: app/Kolnovel-v5.2.5-premium-v8.6.apk
+      V8_SHA: 88128a2c2a0317cfc11ecfe1147e60afb7f8aeb50c1a355f756fbefe3535fc2b
+      VARIANT: v8.6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Browse-All screen (279) + search + detail + export on v8.6
+        run: bash scripts/kolnovel-redroid-v8.6-verify-allnovels.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.6-verify-allnovels
+          path: artifacts/
+  parts:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    env:
+      V8_APK: app/Kolnovel-v5.2.5-premium-v8.6.apk
+      V8_SHA: 88128a2c2a0317cfc11ecfe1147e60afb7f8aeb50c1a355f756fbefe3535fc2b
+      VARIANT: v8.6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Part 5 decisive + PDF-spec checks on v8.6
+        run: bash scripts/kolnovel-redroid-v8.6-verify-parts.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.6-verify-parts
+          path: artifacts/
+  api34:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      V8_APK: app/Kolnovel-v5.2.5-premium-v8.6.apk
+      V8_SHA: 88128a2c2a0317cfc11ecfe1147e60afb7f8aeb50c1a355f756fbefe3535fc2b
+      VARIANT: v8.6
+    steps:
+      - uses: actions/checkout@v4
+      - name: API 34 auto-save on v8.6
+        run: bash scripts/kolnovel-redroid-v8.6-verify-api34.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.6-verify-api34
+          path: artifacts/
+  retry:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      V8_APK: app/Kolnovel-v5.2.5-premium-v8.6.apk
+      V8_SHA: 88128a2c2a0317cfc11ecfe1147e60afb7f8aeb50c1a355f756fbefe3535fc2b
+      VARIANT: v8.6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Renderer-death retry dialog proof on v8.6
+        run: bash scripts/kolnovel-redroid-v8.6-verify-retry.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.6-verify-retry
+          path: artifacts/
