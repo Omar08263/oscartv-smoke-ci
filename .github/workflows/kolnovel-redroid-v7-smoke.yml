@@ -1,0 +1,27 @@
+name: kolnovel-redroid-v7-smoke
+# Kolnovel v7 SMOKE — the gate before any wider v7 verification.
+# Checks: v7 installs + launches, cold open of 38916 via search (the v6c
+# 2/2 crash path) does not crash, "تصدير PDF" is visible with NO scrolling,
+# and ONE tap starts PdfExportActivity. See
+# scripts/kolnovel-redroid-v7-smoke.sh for the full contract.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v7-smoke.yml'
+      - 'scripts/kolnovel-redroid-v7-smoke.sh'
+      - 'app/Kolnovel-v5.2.5-premium-v7.apk'
+  workflow_dispatch:
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid v7 smoke — install, cold detail-open, button visible, one tap
+        run: bash scripts/kolnovel-redroid-v7-smoke.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-redroid-v7-smoke-artifacts
+          path: artifacts/
