@@ -1,0 +1,165 @@
+name: kolnovel-redroid-v8.5-verify
+# Kolnovel v8.5 ISOLATION VERIFICATION on Redroid (ubuntu-24.04-arm only).
+# Two variants, differing ONLY in D1 vs R (BUILD-V8.5.md §3/§5):
+#   D1only = v8.2 bundle + D1 (F27786) + corrected handler tables derived
+#            for v8.2 code; R functions byte-identical to v8.2.
+#   Ronly  = v8.4 bundle with F27786 reverted to v8.2 bytes (R1/R2/R3 +
+#            corrected v8.4 handler tables preserved).
+# Both carry CORRECTED handler tables on purpose — otherwise the v8.3
+# deterministic 12/12 crash would return in Ronly and void the experiment.
+# Reading logic (BUILD-V8.5 §3): D1only alone crashes -> D1 suspect;
+# Ronly alone crashes -> R suspect; both crash -> shared v8 base (or an
+# interaction); neither crashes -> D1 x R interaction.
+# Audit of shipped v8.4 was INCONCLUSIVE (all four functions clean
+# instruction-by-instruction; corrected tables have instruction-boundary
+# bounds and the single Catch as target; Catch registers dominated from
+# entry; no Catch loop; generator ctors set env slots = 0 explicitly —
+# the "uninitialised env" hypothesis is dead; 27795/29465/27783 have no
+# handlers). Tombstone anatomy: crashes deref a 64-bit value whose upper
+# half is 0x00010003 during performMicrotaskCheckpoint, but no register,
+# instruction or table in the four functions explains where it is
+# produced — hence isolation is the way.
+# 6 parallel jobs (one workflow, one push):
+#   coldopen-d1 — 12 cold detail-opens of 38916 on D1only.
+#   coldopen-r  — same 12 on Ronly.
+#   allnovels-d1 — Browse-All 279 screen on D1only.
+#   allnovels-r  — Browse-All 279 screen on Ronly.
+#   parts-r     — (C) ONLY part 5 (1001-1250, ref 7,324 pp = Chrome oracle)
+#                 on Ronly (closest to v8.4); export code untouched.
+#   api34-r     — (D1) 76237 part 1 (1-250) auto-save on Ronly, SDK 34.
+# Harness fixes vs v8.4 (VERIFY-V8.4 §8, MANDATORY in v8.5):
+#   (a) allnovels verdict checks alive() BEFORE "DIED AT OPEN" — a live
+#       app showing «تعذر تحميل الروايات» is LOAD-ERROR, not a death;
+#       the error-card «إعادة المحاولة» button is TAPPED live (never
+#       tested before) and the re-load re-polled; JS error lines are
+#       captured mid-load (polls 6/12) before uiautomator dumps flood
+#       the logcat ring buffer.
+#   (b) every Fatal signal is counted, not SIGSEGV only (SIGABRT hid
+#       as a fifth crash in v8.4); coldopen also lists the #00 pc and
+#       fault addr of every native crash.
+# All other harness lessons carry over from v8.4 (see that workflow):
+# print dialog "Select a printer"; SAF save tap text="SAVE"; spooler
+# creates the PDF at size 0 first — pull only when non-zero and stable
+# across two 10 s-apart polls (up to 180 s); Latin search ("Reverend");
+# detail proven via «المحتوى» tab; retry tap hits the clickable Button,
+# not the message text; seen-pdfs cleared AND all old PDFs in
+# Download/Kolnovel/ deleted before every attempt; close the keyboard
+# (Back key) before tapping any search result; logcat-final captured
+# directly for allnovels; titles carry translator numbers — compare
+# heading SEQUENCE vs the Chrome oracle, never literal numbers or a
+# 250±10 bound; font verdict is size 21 + family Cairo (pdftohtml
+# reports AAAAAA+Cairo, never Cairo-Bold).
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v8.5-verify.yml'
+      - 'scripts/kolnovel-redroid-v8.5-common.sh'
+      - 'scripts/kolnovel-redroid-v8.5-verify-parts.sh'
+      - 'scripts/kolnovel-redroid-v8.5-verify-allnovels.sh'
+      - 'scripts/kolnovel-redroid-v8.5-verify-api34.sh'
+      - 'scripts/kolnovel-redroid-v8.5-verify-coldopen.sh'
+      - 'scripts/kolnovel-v8-titles.txt'
+      - 'app/Kolnovel-v5.2.5-premium-v8.5-D1only.apk'
+      - 'app/Kolnovel-v5.2.5-premium-v8.5-Ronly.apk'
+  workflow_dispatch:
+env:
+  V8_SHA_D1ONLY: 7366810afe10e13d58d95c8650d9db5d1547734ef2eb8750b4cbd8e61e53cb9a
+  V8_SHA_RONLY: 74b15122dce57f138631dd9fda3f7b11c239b646dcc9a4d0dc842c3e90647103
+jobs:
+  coldopen-d1:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      V8_APK: app/Kolnovel-v5.2.5-premium-v8.5-D1only.apk
+      V8_SHA: 7366810afe10e13d58d95c8650d9db5d1547734ef2eb8750b4cbd8e61e53cb9a
+      VARIANT: v8.5-D1only
+    steps:
+      - uses: actions/checkout@v4
+      - name: 12 cold detail-opens + button + 3 taps on D1only
+        run: bash scripts/kolnovel-redroid-v8.5-verify-coldopen.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.5-verify-coldopen-d1only
+          path: artifacts/
+  coldopen-r:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      V8_APK: app/Kolnovel-v5.2.5-premium-v8.5-Ronly.apk
+      V8_SHA: 74b15122dce57f138631dd9fda3f7b11c239b646dcc9a4d0dc842c3e90647103
+      VARIANT: v8.5-Ronly
+    steps:
+      - uses: actions/checkout@v4
+      - name: 12 cold detail-opens + button + 3 taps on Ronly
+        run: bash scripts/kolnovel-redroid-v8.5-verify-coldopen.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.5-verify-coldopen-ronly
+          path: artifacts/
+  allnovels-d1:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      V8_APK: app/Kolnovel-v5.2.5-premium-v8.5-D1only.apk
+      V8_SHA: 7366810afe10e13d58d95c8650d9db5d1547734ef2eb8750b4cbd8e61e53cb9a
+      VARIANT: v8.5-D1only
+    steps:
+      - uses: actions/checkout@v4
+      - name: Browse-All screen (279) + search + detail + export on D1only
+        run: bash scripts/kolnovel-redroid-v8.5-verify-allnovels.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.5-verify-allnovels-d1only
+          path: artifacts/
+  allnovels-r:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      V8_APK: app/Kolnovel-v5.2.5-premium-v8.5-Ronly.apk
+      V8_SHA: 74b15122dce57f138631dd9fda3f7b11c239b646dcc9a4d0dc842c3e90647103
+      VARIANT: v8.5-Ronly
+    steps:
+      - uses: actions/checkout@v4
+      - name: Browse-All screen (279) + search + detail + export on Ronly
+        run: bash scripts/kolnovel-redroid-v8.5-verify-allnovels.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.5-verify-allnovels-ronly
+          path: artifacts/
+  parts-r:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    env:
+      V8_APK: app/Kolnovel-v5.2.5-premium-v8.5-Ronly.apk
+      V8_SHA: 74b15122dce57f138631dd9fda3f7b11c239b646dcc9a4d0dc842c3e90647103
+      VARIANT: v8.5-Ronly
+    steps:
+      - uses: actions/checkout@v4
+      - name: Part 5 decisive + PDF-spec checks on Ronly
+        run: bash scripts/kolnovel-redroid-v8.5-verify-parts.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.5-verify-parts-ronly
+          path: artifacts/
+  api34-r:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      V8_APK: app/Kolnovel-v5.2.5-premium-v8.5-Ronly.apk
+      V8_SHA: 74b15122dce57f138631dd9fda3f7b11c239b646dcc9a4d0dc842c3e90647103
+      VARIANT: v8.5-Ronly
+    steps:
+      - uses: actions/checkout@v4
+      - name: API 34 auto-save on Ronly
+        run: bash scripts/kolnovel-redroid-v8.5-verify-api34.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v8.5-verify-api34-ronly
+          path: artifacts/
