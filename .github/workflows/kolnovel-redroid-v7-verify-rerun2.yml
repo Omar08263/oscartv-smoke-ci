@@ -1,0 +1,42 @@
+name: kolnovel-redroid-v7-verify-rerun2
+# Kolnovel v7 VERIFY — rerun round 2 (follow-up to runs 44466265799 + 44469996699).
+#   retry3 — item 5 round 3: kill at PDF-appearance (print start). Round 1
+#            was NOT-PROVEN (export finished first); round 2 killed an IDLE
+#            renderer at +25s, still in the fetch phase — harness miss.
+#   wide3  — item 6 round 3: real reader flow (chapter 1 -> download dialog
+#            -> tap «تحميل» -> tap chapter again -> reader) + settings tab
+#            from a verified home state. Round 2's "reader=opened" was a
+#            false positive (it was the download dialog).
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v7-verify-rerun2.yml'
+      - 'scripts/kolnovel-redroid-v7-verify-retry3.sh'
+      - 'scripts/kolnovel-redroid-v7-verify-wide3.sh'
+  workflow_dispatch:
+jobs:
+  retry3:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Renderer-death retry dialog proof (round 3, kill at print start)
+        run: bash scripts/kolnovel-redroid-v7-verify-retry3.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v7-verify-retry3
+          path: artifacts/
+  wide3:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Real reader flow (download then open chapter 1)
+        run: bash scripts/kolnovel-redroid-v7-verify-wide3.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v7-verify-wide3
+          path: artifacts/
