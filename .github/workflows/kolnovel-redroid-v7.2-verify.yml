@@ -1,0 +1,77 @@
+name: kolnovel-redroid-v7.2-verify
+# Kolnovel v7.2 FINAL TARGETED VERIFICATION on Redroid (ubuntu-24.04-arm only).
+# v7.2 change vs v7.1: onWrite latch in tryAutoSave 120 s -> 240 s (one line).
+# 4 parallel jobs, one per verification item (see VERIFY-V7.2.md for verdicts):
+#   parts    — item 1 (DECISIVE): Part 3 (1001-1500) end-to-end within 240 s
+#              + Part 2 regression (500/500), each x2 attempts max
+#   retry    — item 2: renderer kill at print start -> Arabic retry dialog
+#              -> tap retry -> export completes, PDF verified (401/401)
+#   api34    — item 3: one 76237 export on Redroid 14 (SDK 34 confirmed)
+#   coldopen — item 3: one cold detail-open of 38916 via search + button
+#              visible at top + one tap -> PdfExportActivity
+# No job auto-taps a retry dialog in the parts job: a 240 s timeout dialog
+# there is recorded as evidence (TIMEOUT-DIALOG), not consumed.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v7.2-verify.yml'
+      - 'scripts/kolnovel-redroid-v7-common.sh'
+      - 'scripts/kolnovel-redroid-v7.2-verify-parts.sh'
+      - 'scripts/kolnovel-redroid-v7.2-verify-retry.sh'
+      - 'scripts/kolnovel-redroid-v7.2-verify-api34.sh'
+      - 'scripts/kolnovel-redroid-v7.2-verify-coldopen.sh'
+      - 'app/Kolnovel-v5.2.5-premium-v7.2.apk'
+  workflow_dispatch:
+env:
+  V7_APK: app/Kolnovel-v5.2.5-premium-v7.2.apk
+  V7_SHA: f3464b1f84b9d9821d02030724167e97959bcfe84332e7b2d01dd562d6d828ba
+jobs:
+  parts:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - name: Part 3 decisive + Part 2 regression on v7.2
+        run: bash scripts/kolnovel-redroid-v7.2-verify-parts.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v7.2-verify-parts
+          path: artifacts/
+  retry:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Renderer-death retry dialog proof on v7.2
+        run: bash scripts/kolnovel-redroid-v7.2-verify-retry.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v7.2-verify-retry
+          path: artifacts/
+  api34:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: API 34 auto-save on v7.2
+        run: bash scripts/kolnovel-redroid-v7.2-verify-api34.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v7.2-verify-api34
+          path: artifacts/
+  coldopen:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cold detail-open + button + one tap on v7.2
+        run: bash scripts/kolnovel-redroid-v7.2-verify-coldopen.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-v7.2-verify-coldopen
+          path: artifacts/
