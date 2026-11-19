@@ -76,11 +76,63 @@ alive() { adb -s "$DEV" shell pidof "$PKG" 2>/dev/null | grep -q .; }
 crash_excerpt() {
   grep -i -B2 -A 30 "FATAL EXCEPTION\|Fatal signal\|ANR in $PKG" "$1" > "$2" 2>/dev/null || true
 }
+# dismiss_onboarding — GDPR consent dismissal by POLLING (VERIFY-V8.6-DIAG
+# §6 harness rule, proven: the single-tap dismiss worked 1/1 at install
+# but failed 13/13 after `pm clear` — the UMP consent dialog appears
+# ~15-18 s AFTER launch, i.e. after the single tap had already fired).
+# Polls for up to ~90 s: taps "Consent" whenever it appears, and only
+# returns success once the home tabs ("اكتشف"/"الرئيسية") are visible.
+# Sets CONSENT_DISMISSED=1/0 (+ CONSENT_TAPS) and records the guard in
+# $RESULT before any query runs, so a 0/12 can never again be misread as
+# an app result when the dialog was really in the way.
 dismiss_onboarding() {
-  tap_text "Consent" || tap_text "consent" || true
-  sleep 3
+  CONSENT_DISMISSED=0
+  CONSENT_TAPS=0
+  local i=0
+  for i in $(seq 1 12); do
+    rm -f artifacts/ui-consent-poll.xml
+    dump_ui "consent-poll" >/dev/null 2>&1
+    if [ ! -s artifacts/ui-consent-poll.xml ]; then
+      echo "dismiss_onboarding: poll $i/12 — UI dump missing/empty, retrying"
+      sleep 5
+      continue
+    fi
+    if grep -q "Consent" artifacts/ui-consent-poll.xml 2>/dev/null; then
+      if tap_text "Consent" || tap_text "consent"; then
+        CONSENT_TAPS=$((CONSENT_TAPS + 1))
+        echo "dismiss_onboarding: tapped Consent (tap $CONSENT_TAPS, poll $i/12)"
+      else
+        echo "dismiss_onboarding: Consent visible in dump but not tappable (poll $i/12)"
+      fi
+      sleep 3
+      continue
+    fi
+    # No consent dialog in this dump: home tabs visible means the dialog
+    # is gone (or never appeared) and the app is really on HOME.
+    if grep -q "اكتشف\|الرئيسية" artifacts/ui-consent-poll.xml 2>/dev/null; then
+      CONSENT_DISMISSED=1
+      echo "dismiss_onboarding: home tabs visible, consent gone (poll $i/12)"
+      break
+    fi
+    sleep 5
+  done
+  # Any remaining first-run onboarding (skip/next) — harmless if absent.
   tap_text "تخطي" || tap_text "التالي" || tap_text "Next" || true
-  sleep 5
+  sleep 3
+  # Final guard: re-check home tabs after the skip taps.
+  if [ "$CONSENT_DISMISSED" != "1" ]; then
+    dump_ui "consent-final" >/dev/null 2>&1
+    if grep -q "اكتشف\|الرئيسية" artifacts/ui-consent-final.xml 2>/dev/null \
+       && ! grep -q "asks for your consent" artifacts/ui-consent-final.xml 2>/dev/null; then
+      CONSENT_DISMISSED=1
+      echo "dismiss_onboarding: home tabs confirmed at final guard"
+    fi
+  fi
+  if [ -n "${RESULT:-}" ]; then
+    echo "consent_dismissed=$CONSENT_DISMISSED consent_taps=$CONSENT_TAPS (polling dismiss, ~90s max; home tabs must be visible before any query)" | tee -a "$RESULT"
+  else
+    echo "consent_dismissed=$CONSENT_DISMISSED consent_taps=$CONSENT_TAPS"
+  fi
 }
 # Cold relaunch: force-stop + start + dismiss onboarding. Leaves app on home.
 cold_relaunch() {
