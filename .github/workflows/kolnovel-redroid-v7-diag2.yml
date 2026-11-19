@@ -1,0 +1,42 @@
+name: kolnovel-redroid-v7-diag2
+# Kolnovel v7 DIAG v2 — re-run of the diag sweep + API 34 check with the
+# harness bugs of run 44452585690 fixed (see the v2 scripts' headers):
+#  diag2  — Latin-only search, detail verification by title + المحتوى tab,
+#           card-tap retry x3, verified back-navigation.
+#  api34b — stable non-zero size wait + %PDF/pdfinfo verification before
+#           claiming auto-save completion on API 34.
+# Diagnosis ONLY: no APK is built or modified here.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kolnovel-redroid-v7-diag2.yml'
+      - 'scripts/kolnovel-redroid-v7-diag2.sh'
+      - 'scripts/kolnovel-redroid-v7-api34b.sh'
+      - 'app/Kolnovel-v5.2.5-premium-v6.apk'
+  workflow_dispatch:
+jobs:
+  diag2:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid v7 diag v2 — stability sweep (v6, fixed harness)
+        run: bash scripts/kolnovel-redroid-v7-diag2.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-redroid-v7-diag2-artifacts
+          path: artifacts/
+  api34b:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Redroid v7 diag v2 — auto-save on API 34 (verified pull)
+        run: bash scripts/kolnovel-redroid-v7-api34b.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kolnovel-redroid-v7-api34b-artifacts
+          path: artifacts/
