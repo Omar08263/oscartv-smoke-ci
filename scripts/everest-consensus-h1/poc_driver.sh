@@ -3,10 +3,12 @@
 #
 # Drives a live single-sequencer Everest devnet through two signer rotations:
 #   ROTATION 1 (FAULT): rotate SystemConfig.unsafeBlockSigner to a new key,
-#     restart the builder with that key, and fail the shadow validator's
-#     delayed L1 fetch of the rotation block exactly once (via the host
-#     fault proxy). Expected: the shadow validator's unsafe head stalls
-#     forever (until restart) while the builder advances.
+#     restart the builder with that key, and fail EVERY delayed L1 fetch
+#     of the rotation block inside a bounded head window (via the host
+#     fault proxy, sticky -- not one-shot: run 44723957902 showed a
+#     one-shot can be consumed by a non-watcher fetch). Expected: the
+#     shadow validator's unsafe head stalls forever (until restart)
+#     while the builder advances.
 #   HEAL: restart the shadow validator; its startup re-read of the signer
 #     must heal it (unsafe head catches up).
 #   ROTATION 2 (CONTROL, no fault): same rotation with the proxy disarmed.
@@ -73,6 +75,65 @@ invalid_signer_count() { # Prometheus counter for gossip signer rejections (supp
   curl -s "$SHADOW_METRICS" 2>/dev/null | grep 'invalid_signer' | awk '{s+=$NF} END {print s+0}'
 }
 
+strip_ansi() { # stdin -> stdout with ANSI escape sequences removed (node logs are colored;
+  # raw "target=7" never appears: the field name and "=" are wrapped in separate escapes)
+  sed 's/\x1b\[[0-9;]*m//g'
+}
+
+delayed_fetch_errors() { # Prometheus counter: the watcher's delayed L1 block fetch failures
+  # (actor.rs increments it on BOTH the Err and the Ok(None) skip paths).
+  # This is the authoritative "did the fault reach the watcher" signal --
+  # independent of log tails. The series appears only after the first
+  # increment, so compare before/after (delta), not the absolute value.
+  curl -s "$SHADOW_METRICS" 2>/dev/null | grep 'l1_verifier_delayed_fetch_errors' | awk '{s+=$NF} END {print s+0}'
+}
+
+dump_metrics() { # <file> — save the raw metrics exposition for the evidence pack
+  curl -s "$SHADOW_METRICS" 2>/dev/null > "$1" || true
+}
+
+verify_builder_key() { # <key-no-0x> — confirm the running builder container carries the key
+  local key="$1" waited=0 cid cmd
+  while [ "$waited" -lt 120 ]; do
+    cid="$(cd "$BASE_DIR" && $COMPOSE ps -q base-builder 2>/dev/null)"
+    if [ -n "$cid" ]; then
+      cmd="$(docker inspect --format '{{json .Config.Cmd}}' "$cid" 2>/dev/null)"
+      if echo "$cmd" | grep -q "$key"; then
+        log "builder key verified in container command (cid ${cid:0:12})"
+        return 0
+      fi
+      # Fallback: the key might live elsewhere in the container config.
+      if docker inspect "$cid" 2>/dev/null | grep -q "$key"; then
+        log "builder key verified in container inspect (cid ${cid:0:12})"
+        return 0
+      fi
+    fi
+    sleep 10; waited=$((waited + 10))
+  done
+  log "ERROR: builder container does NOT carry the new sequencer key after 120s (key=$key)"
+  return 1
+}
+
+start_log_streams() { # stream both nodes' FULL logs to the evidence dir.
+  # A --tail 4000 dump covers only ~1 minute at -vvv (run 44723957902 lost
+  # the whole fault window that way); the streams are the primary record.
+  (cd "$BASE_DIR" && $COMPOSE logs -f base-shadow-validator > "$EVIDENCE/shadow-validator-full.log" 2>&1 & echo $! > "$EVIDENCE/.shadow-logs-pid")
+  (cd "$BASE_DIR" && $COMPOSE logs -f base-builder > "$EVIDENCE/builder-full.log" 2>&1 & echo $! > "$EVIDENCE/.builder-logs-pid")
+  sleep 3
+  for f in "$EVIDENCE/shadow-validator-full.log" "$EVIDENCE/builder-full.log"; do
+    [ -s "$f" ] || log "WARNING: log stream produced no output yet: $f"
+  done
+  log "full log streams started (shadow + builder)"
+}
+
+stop_log_streams() {
+  for f in "$EVIDENCE/.shadow-logs-pid" "$EVIDENCE/.builder-logs-pid"; do
+    [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null || true
+  done
+  sleep 5  # let the streams flush
+  log "full log streams stopped"
+}
+
 wait_l1_head() { # <target> <timeout_s>
   local target="$1" timeout_s="$2" waited=0 head
   while [ "$waited" -lt "$timeout_s" ]; do
@@ -119,14 +180,16 @@ rotate_signer() { # <new-addr> -> prints the DECIMAL L1 block number of the rota
   echo "$block"
 }
 
-restart_builder_with_key() { # <key-no-0x>
+restart_builder_with_key() { # <key-no-0x> — returns 0 only if the new key is in the running container
   local key="$1"
   sed -i "s/^SEQUENCER_KEY=.*/SEQUENCER_KEY=$key/" "$BASE_DIR/etc/docker/devnet-env"
-  (cd "$BASE_DIR" && $COMPOSE up -d base-builder >/dev/null 2>&1)
+  (cd "$BASE_DIR" && $COMPOSE up -d base-builder > "$EVIDENCE/builder-restart-${key:0:8}.log" 2>&1)
   log "builder restarted with new sequencer key"
+  verify_builder_key "$key"
 }
 
 VERDICT_FAULT=FAIL; VERDICT_HEAL=FAIL; VERDICT_CONTROL=FAIL
+KEY1_OK=PASS; KEY2_OK=PASS  # flipped to FAIL if the builder key switch is not verified
 
 # ---------------- Phase 0: baseline ----------------
 log "== Phase 0: baseline =="
@@ -156,40 +219,60 @@ sync_sample "baseline-ok"
 
 # ---------------- Phase 1: fault rotation ----------------
 log "== Phase 1: FAULT rotation =="
+start_log_streams
+FETCH_ERR_PRE="$(delayed_fetch_errors)"
+log "delayed-fetch-errors baseline (before fault): $FETCH_ERR_PRE"
 N1="$(rotate_signer "$NEW1_ADDR")"
 [ -z "$N1" ] && { fail "rotation 1 tx produced no block number"; exit 1; }
 log "rotation 1 in L1 block N1=$N1; on-chain signer now: $(onchain_signer)"
+# Sticky window [N1+14, N1+25): the watcher fetches the rotation block at
+# head N1+15; the window covers it even if the watcher's head lags a few
+# blocks, and lets the derivation recover once the window closes.
 curl -s -X POST "$PROXY/arm" -H 'Content-Type: application/json' \
-  --data "{\"block\": $N1, \"min_head\": $((N1 + 14))}" | tee -a "$EVIDENCE/proxy-arm-1.json"; echo
-restart_builder_with_key "$NEW1_KEY"
+  --data "{\"block\": $N1, \"min_head\": $((N1 + 14)), \"max_head\": $((N1 + 25))}" | tee -a "$EVIDENCE/proxy-arm-1.json"; echo
+restart_builder_with_key "$NEW1_KEY" || KEY1_OK=FAIL
 log "waiting for builder to resume producing..."
 wait_builder_advancing 600 || fail "builder did not resume after rotation 1"
 sync_sample "fault-builder-resumed"
 SHADOW_PRE_FAULT="$(unsafe_of "$SHADOW_OP")"
 log "shadow unsafe just after builder resume: $SHADOW_PRE_FAULT"
+# Sample the shadow's trajectory through the fault window (not just the
+# endpoints): a transient stall-then-resume must be visible.
+( while true; do sync_sample "fault-sample" > /dev/null 2>&1; sleep 30; done ) &
+echo $! > "$EVIDENCE/.fault-sampler-pid"
 TARGET_HEAD=$((N1 + 30))
 log "waiting for L1 head >= $TARGET_HEAD (N1+30) ..."
 wait_l1_head "$TARGET_HEAD" 900 || fail "L1 did not reach N1+30"
 sleep 30  # let the last gossip validations settle
+kill "$(cat "$EVIDENCE/.fault-sampler-pid")" 2>/dev/null || true
 sync_sample "fault-window-end"
 SHADOW_POST_FAULT="$(unsafe_of "$SHADOW_OP")"
 BUILDER_POST_FAULT="$(unsafe_of "$BUILDER_OP")"
 log "fault window end: shadow unsafe=$SHADOW_POST_FAULT (was $SHADOW_PRE_FAULT) builder unsafe=$BUILDER_POST_FAULT"
-# Evidence from the two logs + the proxy.
-SHADOW_LOGS="$EVIDENCE/shadow-validator-fault.log"
-BUILDER_LOGS="$EVIDENCE/builder-fault.log"
-(cd "$BASE_DIR" && $COMPOSE logs --tail 4000 base-shadow-validator > "$SHADOW_LOGS" 2>&1)
-(cd "$BASE_DIR" && $COMPOSE logs --tail 4000 base-builder > "$BUILDER_LOGS" 2>&1)
-SKIP_COUNT="$(grep -c "Failed to fetch delayed L1 block; skipping head update" "$SHADOW_LOGS" || true)"
-SKIP_N1="$(grep "Failed to fetch delayed L1 block; skipping head update" "$SHADOW_LOGS" | grep -c "target=$N1" || true)"
-SIGNER_REJ="$(grep -ci "invalid_signer" "$SHADOW_LOGS" || true)"
+# Evidence: the FULL streamed log (ANSI-stripped) + the proxy + the metrics.
+# The --tail dumps are backup only (4000 lines ~= 1 min at -vvv).
+(cd "$BASE_DIR" && $COMPOSE logs --tail 20000 base-shadow-validator > "$EVIDENCE/shadow-validator-fault.log" 2>&1)
+(cd "$BASE_DIR" && $COMPOSE logs --tail 20000 base-builder > "$EVIDENCE/builder-fault.log" 2>&1)
+SHADOW_FULL="$EVIDENCE/shadow-validator-full.log"
+SKIP_COUNT="$(strip_ansi < "$SHADOW_FULL" | grep -c "Failed to fetch delayed L1 block; skipping head update" || true)"
+SKIP_N1="$(strip_ansi < "$SHADOW_FULL" | grep "Failed to fetch delayed L1 block; skipping head update" | grep -c "target=$N1" || true)"
+SIGNER_REJ="$(strip_ansi < "$SHADOW_FULL" | grep -ci "invalid_signer" || true)"
 SIGNER_METRIC_FAULT="$(invalid_signer_count)"
+FETCH_ERR_POST="$(delayed_fetch_errors)"
+FETCH_ERR_DELTA=$((FETCH_ERR_POST - FETCH_ERR_PRE))
+dump_metrics "$EVIDENCE/shadow-metrics-fault.txt"
 PROXY_STATUS="$(curl -s "$PROXY/status")"
 echo "$PROXY_STATUS" > "$EVIDENCE/proxy-status-fault.json"
 PROXY_FIRED="$(echo "$PROXY_STATUS" | jq -r '.fired')"
 PROXY_FIRED_BLOCK="$(echo "$PROXY_STATUS" | jq -r '.fired_detail.block // empty')"
-log "fault evidence: proxy fired=$PROXY_FIRED block=$PROXY_FIRED_BLOCK | skip-logs=$SKIP_COUNT (target=N1: $SKIP_N1) | invalid_signer lines=$SIGNER_REJ | invalid_signer metric count=$SIGNER_METRIC_FAULT"
+PROXY_FAILED_COUNT="$(echo "$PROXY_STATUS" | jq -r '.failed_count // 0')"
+log "fault evidence: proxy fired=$PROXY_FIRED block=$PROXY_FIRED_BLOCK failed_requests=$PROXY_FAILED_COUNT | key_switch=$KEY1_OK | delayed-fetch-errors delta=$FETCH_ERR_DELTA (pre=$FETCH_ERR_PRE post=$FETCH_ERR_POST) | skip-logs=$SKIP_COUNT (target=N1: $SKIP_N1) | invalid_signer lines=$SIGNER_REJ | invalid_signer metric count=$SIGNER_METRIC_FAULT"
+if [ "$FETCH_ERR_DELTA" -lt 1 ] || [ "$SKIP_N1" -lt 1 ]; then
+  log "DIAGNOSIS: fault did NOT reach the watcher (delayed-fetch-errors delta=$FETCH_ERR_DELTA, skip-logs for N1=$SKIP_N1) — a FAIL here is a harness miss, NOT a candidate refutation"
+fi
 if [ "$PROXY_FIRED" = "true" ] && [ "$PROXY_FIRED_BLOCK" = "$N1" ] \
+   && [ "$KEY1_OK" = "PASS" ] \
+   && [ "$FETCH_ERR_DELTA" -ge 1 ] \
    && [ "$SKIP_N1" -ge 1 ] \
    && [ -n "$SHADOW_PRE_FAULT" ] && [ -n "$SHADOW_POST_FAULT" ] \
    && [ "$((SHADOW_POST_FAULT - SHADOW_PRE_FAULT))" -le 2 ] \
@@ -215,10 +298,12 @@ sync_sample "heal-done"
 # ---------------- Phase 3: control rotation (no fault) ----------------
 log "== Phase 3: CONTROL rotation (proxy disarmed) =="
 curl -s -X POST "$PROXY/disarm" | tee -a "$EVIDENCE/proxy-disarm.json"; echo
+FETCH_ERR_PRE_CTRL="$(delayed_fetch_errors)"
+log "delayed-fetch-errors baseline (before control): $FETCH_ERR_PRE_CTRL"
 N2="$(rotate_signer "$NEW2_ADDR")"
 [ -z "$N2" ] && { fail "rotation 2 tx produced no block number"; exit 1; }
 log "rotation 2 in L1 block N2=$N2; on-chain signer now: $(onchain_signer)"
-restart_builder_with_key "$NEW2_KEY"
+restart_builder_with_key "$NEW2_KEY" || KEY2_OK=FAIL
 wait_builder_advancing 600 || fail "builder did not resume after rotation 2"
 sync_sample "control-builder-resumed"
 SHADOW_PRE_CTRL="$(unsafe_of "$SHADOW_OP")"
@@ -235,13 +320,16 @@ sync_sample "control-window-end"
 SHADOW_POST_CTRL="$(unsafe_of "$SHADOW_OP")"
 BUILDER_POST_CTRL="$(unsafe_of "$BUILDER_OP")"
 log "control window end: shadow unsafe=$SHADOW_POST_CTRL builder unsafe=$BUILDER_POST_CTRL"
-(cd "$BASE_DIR" && $COMPOSE logs --tail 4000 base-shadow-validator > "$EVIDENCE/shadow-validator-control.log" 2>&1)
-SKIP_N2="$(grep "Failed to fetch delayed L1 block; skipping head update" "$EVIDENCE/shadow-validator-control.log" | grep -c "target=$N2" || true)"
+(cd "$BASE_DIR" && $COMPOSE logs --tail 20000 base-shadow-validator > "$EVIDENCE/shadow-validator-control.log" 2>&1)
+SKIP_N2="$(strip_ansi < "$EVIDENCE/shadow-validator-full.log" | grep "Failed to fetch delayed L1 block; skipping head update" | grep -c "target=$N2" || true)"
+FETCH_ERR_POST_CTRL="$(delayed_fetch_errors)"
+FETCH_ERR_DELTA_CTRL=$((FETCH_ERR_POST_CTRL - FETCH_ERR_PRE_CTRL))
+dump_metrics "$EVIDENCE/shadow-metrics-control.txt"
 PROXY_STATUS2="$(curl -s "$PROXY/status")"
 echo "$PROXY_STATUS2" > "$EVIDENCE/proxy-status-control.json"
 PROXY_FIRED2="$(echo "$PROXY_STATUS2" | jq -r '.fired')"
-log "control evidence: proxy fired=$PROXY_FIRED2 | skip-logs for N2=$SKIP_N2 | mid-window stall: pre=$SHADOW_PRE_CTRL mid=$SHADOW_MID_CTRL post=$SHADOW_POST_CTRL"
-if [ "$PROXY_FIRED2" = "false" ] && [ "$SKIP_N2" = "0" ] \
+log "control evidence: proxy fired=$PROXY_FIRED2 | key_switch=$KEY2_OK | delayed-fetch-errors delta=$FETCH_ERR_DELTA_CTRL | skip-logs for N2=$SKIP_N2 | mid-window stall: pre=$SHADOW_PRE_CTRL mid=$SHADOW_MID_CTRL post=$SHADOW_POST_CTRL"
+if [ "$PROXY_FIRED2" = "false" ] && [ "$KEY2_OK" = "PASS" ] && [ "$FETCH_ERR_DELTA_CTRL" = "0" ] && [ "$SKIP_N2" = "0" ] \
    && [ -n "$SHADOW_MID_CTRL" ] && [ -n "$SHADOW_PRE_CTRL" ] \
    && [ "$((SHADOW_MID_CTRL - SHADOW_PRE_CTRL))" -le 2 ] \
    && [ -n "$SHADOW_POST_CTRL" ] && [ -n "$BUILDER_POST_CTRL" ] \
@@ -254,9 +342,11 @@ fi
 
 # ---------------- Phase 4: evidence pack + verdict ----------------
 log "== Phase 4: evidence pack =="
+stop_log_streams
 (cd "$BASE_DIR" && $COMPOSE ps > "$EVIDENCE/compose-ps.txt" 2>&1 || true)
-(cd "$BASE_DIR" && $COMPOSE logs --tail 2000 base-builder > "$EVIDENCE/builder-final.log" 2>&1 || true)
-(cd "$BASE_DIR" && $COMPOSE logs --tail 2000 base-shadow-validator > "$EVIDENCE/shadow-validator-final.log" 2>&1 || true)
+(cd "$BASE_DIR" && $COMPOSE logs --tail 20000 base-builder > "$EVIDENCE/builder-final.log" 2>&1 || true)
+(cd "$BASE_DIR" && $COMPOSE logs --tail 20000 base-shadow-validator > "$EVIDENCE/shadow-validator-final.log" 2>&1 || true)
+dump_metrics "$EVIDENCE/shadow-metrics-final.txt"
 {
   echo "# Consensus H1 devnet PoC — verdict"
   echo ""
@@ -273,7 +363,11 @@ log "== Phase 4: evidence pack =="
   echo "## Key numbers"
   echo "- Fault window: shadow unsafe $SHADOW_PRE_FAULT -> $SHADOW_POST_FAULT; builder unsafe $BUILDER_POST_FAULT"
   echo "- Control window: shadow unsafe $SHADOW_PRE_CTRL -> mid $SHADOW_MID_CTRL -> $SHADOW_POST_CTRL; builder $BUILDER_POST_CTRL"
-  echo "- Proxy fault fired: $PROXY_FIRED (block $PROXY_FIRED_BLOCK); skip-logs for N1: $SKIP_N1; invalid_signer log lines: $SIGNER_REJ; invalid_signer metric count at fault end: $SIGNER_METRIC_FAULT; skip-logs for N2: $SKIP_N2"
+  echo "- Proxy fault fired: $PROXY_FIRED (block $PROXY_FIRED_BLOCK, failed requests: $PROXY_FAILED_COUNT, sticky window [N1+14, N1+25))"
+  echo "- Builder key switch verified: rotation 1 $KEY1_OK, rotation 2 $KEY2_OK"
+  echo "- delayed-fetch-errors delta: fault $FETCH_ERR_DELTA (pre=$FETCH_ERR_PRE post=$FETCH_ERR_POST), control $FETCH_ERR_DELTA_CTRL"
+  echo "- skip-logs for N1: $SKIP_N1 (all skip-logs: $SKIP_COUNT); invalid_signer log lines: $SIGNER_REJ; invalid_signer metric count at fault end: $SIGNER_METRIC_FAULT; skip-logs for N2: $SKIP_N2"
+  echo "- Full logs: shadow-validator-full.log / builder-full.log (streamed, whole run); metrics: shadow-metrics-fault.txt / shadow-metrics-control.txt"
 } > "$EVIDENCE/VERDICT.md"
 cat "$EVIDENCE/VERDICT.md"
 if [ "$VERDICT_FAULT" = "PASS" ] && [ "$VERDICT_HEAL" = "PASS" ] && [ "$VERDICT_CONTROL" = "PASS" ]; then

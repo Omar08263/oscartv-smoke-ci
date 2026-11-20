@@ -5,9 +5,9 @@ name: everest-consensus-h1-devnet
 # unsafe-block-signer rotations and checks the Consensus H1 mechanism
 # end-to-end (actor-level PoC already verified in
 # base-everest/CONSENSUS-H1-POC-2026-11-20.md):
-#   ROTATION 1 (FAULT): fail the shadow validator's delayed L1 fetch of the
-#     rotation block exactly once (host fault proxy). Expected: its unsafe
-#     head stalls until restart while the builder advances.
+#   ROTATION 1 (FAULT): fail EVERY delayed L1 fetch of the rotation block
+#     inside a bounded head window (sticky host fault proxy). Expected: its
+#     unsafe head stalls until restart while the builder advances.
 #   HEAL: restart the shadow validator; its startup signer re-read heals it.
 #   ROTATION 2 (CONTROL, proxy disarmed): the shadow validator stalls ~15 L1
 #     blocks (the configured verifier delay) and then resumes.
