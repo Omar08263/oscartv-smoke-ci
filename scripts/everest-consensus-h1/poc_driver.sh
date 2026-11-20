@@ -105,12 +105,17 @@ wait_shadow_catchup() { # <timeout_s> — shadow unsafe within 5 of builder unsa
   return 1
 }
 
-rotate_signer() { # <new-addr> -> prints the L1 block number of the rotation tx
-  local new_addr="$1" receipt block
+rotate_signer() { # <new-addr> -> prints the DECIMAL L1 block number of the rotation tx
+  # NOTE: the log line goes to stderr on purpose — this function's stdout
+  # is captured by the caller, so any stdout logging would pollute the
+  # returned block number (run 44719570544 died exactly that way).
+  local new_addr="$1" receipt block_hex block
   receipt="$(cast send "$SYSTEM_CONFIG" "setUnsafeBlockSigner(address)" "$new_addr" \
     --private-key "$DEPLOYER_KEY" --rpc-url "$L1_RPC" --json 2>/dev/null)"
-  block="$(echo "$receipt" | jq -r '.blockNumber // empty')"
-  log "rotation tx: $(echo "$receipt" | jq -r '.transactionHash // "?"') block=$block status=$(echo "$receipt" | jq -r '.status // "?"')"
+  block_hex="$(echo "$receipt" | jq -r '.blockNumber // empty')"
+  [ -z "$block_hex" ] && { echo ""; return 1; }
+  block="$((block_hex))"  # hex (0x..) -> decimal for the proxy + arithmetic
+  log "rotation tx: $(echo "$receipt" | jq -r '.transactionHash // "?"') block=$block_hex ($block) status=$(echo "$receipt" | jq -r '.status // "?"')" >&2
   echo "$block"
 }
 
