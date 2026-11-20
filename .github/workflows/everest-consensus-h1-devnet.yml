@@ -1,0 +1,117 @@
+name: everest-consensus-h1-devnet
+# Consensus H1 devnet PoC — Base Everest audit competition.
+#
+# Drives a live single-sequencer Everest devnet through two SystemConfig
+# unsafe-block-signer rotations and checks the Consensus H1 mechanism
+# end-to-end (actor-level PoC already verified in
+# base-everest/CONSENSUS-H1-POC-2026-11-20.md):
+#   ROTATION 1 (FAULT): fail the shadow validator's delayed L1 fetch of the
+#     rotation block exactly once (host fault proxy). Expected: its unsafe
+#     head stalls until restart while the builder advances.
+#   HEAL: restart the shadow validator; its startup signer re-read heals it.
+#   ROTATION 2 (CONTROL, proxy disarmed): the shadow validator stalls ~15 L1
+#     blocks (the configured verifier delay) and then resumes.
+#
+# Manual trigger only — this job builds the whole Rust workspace in Docker
+# from scratch (no cache) and runs a live devnet; expect 1.5–3.5 h.
+# Evidence (VERDICT.md, sync samples, proxy log, container logs) is always
+# uploaded as an artifact, pass or fail.
+on:
+  workflow_dispatch:
+jobs:
+  devnet-poc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift \
+            2>/dev/null || true
+          sudo apt-get clean || true
+          df -h
+
+      - name: Install Foundry (cast)
+        run: |
+          curl -L https://foundry.paradigm.xyz | bash
+          export PATH="$HOME/.foundry/bin:$PATH"
+          foundryup --version 1.10.0
+          echo "$HOME/.foundry/bin" >> "$GITHUB_PATH"
+          cast --version
+
+      - name: Clone base fork at the pinned commit + apply devnet PRs
+        run: |
+          git clone https://github.com/immunefi-team/audit-comp-base-everest-base.git base
+          cd base
+          git checkout 689054ee14933cb2ee5bd54eadcd8dacbe1cc517
+          git config user.email "everest-poc@local.dev"
+          git config user.name "Everest PoC"
+          # #6682 (disable builder resource metering on Everest) + #6680's real
+          # commit ee43b407f (pinned contracts v8.5.0-rc.1 devnet genesis),
+          # cherry-picked + conflict-resolved offline and verified byte-identical.
+          git apply "$GITHUB_WORKSPACE/scripts/everest-consensus-h1/everest-devnet-prs.patch"
+          git status --short
+          git diff --stat
+          docker --version
+          docker buildx version
+          docker compose version
+
+      - name: Build devnet images (long pole — whole workspace, no cache)
+        run: |
+          cd base
+          export L2_BUILDER_ENABLE_RESOURCE_METERING=false
+          export L2_BASE_DENIM_BLOCK=25
+          export L2_BASE_EVEREST_BLOCK=100
+          export DEVNET_SETUP_TARGET=everest DEVNET_SETUP_IMAGE=devnet-setup:everest-v1
+          docker compose --env-file etc/docker/devnet-env -f etc/docker/docker-compose.yml build setup-devnet
+          PROFILE=dev ZK_HOST_PROFILE=release BASE_SUCCINCT_ELF_REQUIRE=0 \
+            docker buildx bake -f etc/docker/docker-bake.hcl devnet --load
+          docker images
+          docker system df
+          df -h
+
+      - name: Start Everest devnet (single sequencer, subset of services)
+        run: |
+          cd base
+          export L2_BUILDER_ENABLE_RESOURCE_METERING=false
+          export L2_BASE_DENIM_BLOCK=25
+          export L2_BASE_EVEREST_BLOCK=100
+          export DEVNET_SETUP_TARGET=everest DEVNET_SETUP_IMAGE=devnet-setup:everest-v1
+          docker compose --env-file etc/docker/devnet-env -f etc/docker/docker-compose.yml up -d \
+            setup-devnet l1-el l1-cl l1-vc base-bootnode base-builder base-batcher op-batcher base-client base-shadow-validator
+          docker compose --env-file etc/docker/devnet-env -f etc/docker/docker-compose.yml ps
+
+      - name: Start fault proxy + re-point shadow validator at it
+        run: |
+          mkdir -p artifacts
+          nohup python3 scripts/everest-consensus-h1/l1_fault_proxy.py \
+            --listen 127.0.0.1:18545 --upstream http://127.0.0.1:4545 \
+            --log-file artifacts/proxy.log > artifacts/proxy-stdout.log 2>&1 &
+          echo $! > artifacts/proxy.pid
+          sleep 3
+          curl -s http://127.0.0.1:18545/status; echo
+          cd base
+          python3 "$GITHUB_WORKSPACE/scripts/everest-consensus-h1/gen_shadow_override.py" \
+            etc/docker/docker-compose.yml etc/docker/docker-compose.h1-override.yml
+          docker compose --env-file etc/docker/devnet-env \
+            -f etc/docker/docker-compose.yml -f etc/docker/docker-compose.h1-override.yml \
+            up -d base-shadow-validator
+          docker compose --env-file etc/docker/devnet-env \
+            -f etc/docker/docker-compose.yml -f etc/docker/docker-compose.h1-override.yml ps
+
+      - name: Run the H1 PoC driver (fault rotation + heal + control rotation)
+        run: |
+          export BASE_DIR="$GITHUB_WORKSPACE/base"
+          export POC_DIR="$GITHUB_WORKSPACE/scripts/everest-consensus-h1"
+          export EVIDENCE="$GITHUB_WORKSPACE/artifacts"
+          bash scripts/everest-consensus-h1/poc_driver.sh
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: everest-consensus-h1-devnet-evidence
+          path: artifacts/

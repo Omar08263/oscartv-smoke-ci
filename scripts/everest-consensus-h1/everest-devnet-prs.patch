@@ -1,0 +1,451 @@
+diff --git a/.dockerignore b/.dockerignore
+index 045db879a..4c8711bca 100644
+--- a/.dockerignore
++++ b/.dockerignore
+@@ -22,6 +22,7 @@ rustfmt.toml
+ 
+ # Docker config (dockerfiles are sent separately by compose, not from context)
+ etc/docker/
++!etc/docker/everest-contracts/
+ !etc/docker/nitro-enclave/
+ !etc/docker/nitro-host/
+ 
+diff --git a/etc/docker/Dockerfile.devnet b/etc/docker/Dockerfile.devnet
+index d70c43d3a..299532038 100644
+--- a/etc/docker/Dockerfile.devnet
++++ b/etc/docker/Dockerfile.devnet
+@@ -1,3 +1,6 @@
++# The release uses solc 0.8.15, which has no native Linux arm64 binary.
++# Only the Solidity compiler stage needs amd64; the output is EVM bytecode.
++ARG SOLC_PLATFORM=linux/amd64
+ FROM public.ecr.aws/docker/library/golang:1.26-alpine AS builder
+ 
+ # Install build dependencies for CGO (required for BLS library)
+@@ -23,10 +26,12 @@ RUN go build -o /go/bin/eth2-val-tools .
+ 
+ # Build the integrated offline setup from the Base-specific Optimism branch.
+ # Pin the source revision so setup image builds are reproducible.
+-FROM public.ecr.aws/docker/library/golang:1.26-alpine AS base-devnet-builder
++FROM public.ecr.aws/docker/library/golang:1.26-alpine AS base-devnet-source
+ RUN apk add --no-cache git ca-certificates
+ ADD https://github.com/base/optimism.git#896142b334ea20220aa552e9478e5ec406716911 /op-deployer
+ WORKDIR /op-deployer
++
++FROM base-devnet-source AS base-devnet-builder
+ RUN --mount=type=cache,target=/go/pkg/mod \
+     --mount=type=cache,target=/root/.cache/go-build \
+     CGO_ENABLED=0 go build -o /out/op-deployer ./op-deployer/cmd/op-deployer && \
+@@ -35,13 +40,34 @@ RUN --mount=type=cache,target=/go/pkg/mod \
+ RUN /out/extract-artifacts /contract-artifacts && \
+     mv /contract-artifacts/bundle-*/forge-artifacts /artifacts
+ 
+-FROM public.ecr.aws/docker/library/alpine:3.21.3
++FROM --platform=$SOLC_PLATFORM ghcr.io/casey/just:1.51.0@sha256:b8b0b84f90cfcd8bfba89126e74b20517514a9d69f271e4d0d444d837b59df76 AS just
++FROM --platform=$SOLC_PLATFORM ghcr.io/foundry-rs/foundry:v1.5.1@sha256:3a70bfa9bd2c732a767bb60d12c8770b40e8f9b6cca28efc4b12b1be81c7f28e AS everest-contracts
++USER root
++COPY --from=just /just /usr/local/bin/just
++# base/contracts v8.5.0-rc.1. Fetch the peeled commit, not a moving branch.
++ADD https://github.com/base/contracts.git#b9b76d97dca3c420098f597ebc65bee4f28001b7 /contracts
++WORKDIR /contracts
++# Keep nested submodules intact until Forge has checked out each pinned commit.
++RUN git init -q && sed -i 's/forge install --no-git/forge install/' justfile && just deps
++COPY etc/docker/everest-contracts/DevnetGenesis.s.sol scripts/
++# op-deployer looks up fully qualified artifact names literally.
++RUN forge build src scripts/DevnetGenesis.s.sol scripts/SetPreinstalls.s.sol && \
++    mkdir -p forge-artifacts/src/universal forge-artifacts/scripts/deploy && \
++    ln -s ../../Proxy.sol forge-artifacts/src/universal/Proxy.sol && \
++    ln -s ../../SystemDeploy.s.sol forge-artifacts/scripts/deploy/SystemDeploy.s.sol
++
++FROM base-devnet-source AS everest-builder
++COPY etc/docker/everest-contracts/*.go op-deployer/cmd/op-deployer/
++RUN --mount=type=cache,target=/go/pkg/mod \
++    --mount=type=cache,target=/root/.cache/go-build \
++    --mount=from=everest-contracts,source=/contracts/forge-artifacts,target=/artifacts \
++    BASE_DEVNET_ARTIFACTS=/artifacts CGO_ENABLED=0 go test ./op-deployer/cmd/op-deployer -run '^TestEverestContractGenesis$' && \
++    CGO_ENABLED=0 go build -o /out/op-deployer ./op-deployer/cmd/op-deployer
++
++FROM public.ecr.aws/docker/library/alpine:3.21.3 AS devnet-tools
+ 
+ RUN apk add --no-cache bash jq curl
+ 
+-# Compose devnets and system tests share the integrated offline generator.
+-COPY --from=base-devnet-builder /out/op-deployer /usr/local/bin/
+-COPY --from=base-devnet-builder /artifacts /opt/base-devnet-artifacts
+ ENV BASE_DEVNET_ARTIFACTS=/opt/base-devnet-artifacts
+ 
+ # Copy the built binaries
+@@ -54,3 +80,12 @@ RUN mkdir -p /config /output /shared
+ # Copy setup scripts
+ COPY etc/scripts/devnet/ /usr/local/bin/
+ RUN chmod +x /usr/local/bin/*.sh
++
++FROM devnet-tools AS everest
++COPY --from=everest-builder /out/op-deployer /usr/local/bin/
++COPY --from=everest-contracts /contracts/forge-artifacts /opt/base-devnet-artifacts
++
++# Default target for all other devnets and system tests.
++FROM devnet-tools AS standard
++COPY --from=base-devnet-builder /out/op-deployer /usr/local/bin/
++COPY --from=base-devnet-builder /artifacts /opt/base-devnet-artifacts
+diff --git a/etc/docker/Justfile b/etc/docker/Justfile
+index bfe68a935..f3440b195 100644
+--- a/etc/docker/Justfile
++++ b/etc/docker/Justfile
+@@ -310,6 +310,7 @@ _up-devnet compose_profile mode:
+     case "$devnet_mode" in
+       default) ;;
+       everest)
++        export L2_BUILDER_ENABLE_RESOURCE_METERING="${L2_BUILDER_ENABLE_RESOURCE_METERING:-false}"
+         export L2_BASE_DENIM_BLOCK="${L2_BASE_DENIM_BLOCK-25}"
+         export L2_BASE_EVEREST_BLOCK="${L2_BASE_EVEREST_BLOCK:-100}"
+         ;;
+@@ -337,9 +338,12 @@ _up-devnet compose_profile mode:
+         exit 1
+         ;;
+     esac
++    if [[ "$devnet_mode" == everest ]]; then
++      export DEVNET_SETUP_TARGET=everest DEVNET_SETUP_IMAGE=devnet-setup:everest-v1
++    fi
+ 
+     just --justfile {{ source_file() }} down
+-    just --justfile {{ source_file() }} _build-setup-image
++    docker compose {{ _env }} "${compose_files[@]}" build setup-devnet
+     just --justfile {{ source_file() }} _build-rust-images "devnet" "dev"
+     docker compose {{ _env }} "${compose_files[@]}" up -d --no-build --remove-orphans
+ 
+diff --git a/etc/docker/README.md b/etc/docker/README.md
+index ad99590cd..4f1180915 100644
+--- a/etc/docker/README.md
++++ b/etc/docker/README.md
+@@ -211,6 +211,18 @@ block 100:
+ just devnet up everest
+ ```
+ 
++Everest leaves builder resource metering off by default. To opt in, run
++`L2_BUILDER_ENABLE_RESOURCE_METERING=true just devnet up everest`.
++
++Both `just devnet up everest` and `just devnet up-single everest` build the L1
++protocol contracts and L2 predeploys from [`base/contracts` v8.5.0-rc.1
++(`b9b76d97`)](https://github.com/base/contracts/tree/b9b76d97dca3c420098f597ebc65bee4f28001b7).
++The `everest` setup image runs that release's `SystemDeploy` and `L2Genesis`
++scripts offline. Local addresses are in `.devnet/l2/configs/l1-addresses.json`;
++they are not Sepolia addresses. The execution devnet still uses the local
++upgrade-signal mock and does not run a proposer, prover, or challenger. The
++separate Anvil/Nitro recipe and other devnet modes are unchanged.
++
+ Zenith is the permanently unscheduled, genesis-only gate for future hardfork feature testing.
+ Zenith mode additionally activates Everest and Zenith at block 100:
+ 
+diff --git a/etc/docker/docker-compose.ha.yml b/etc/docker/docker-compose.ha.yml
+index 68661bb94..c83a785b8 100644
+--- a/etc/docker/docker-compose.ha.yml
++++ b/etc/docker/docker-compose.ha.yml
+@@ -379,7 +379,7 @@ services:
+       <<: *conductor-healthcheck
+ 
+   setup-conductor:
+-    image: devnet-setup:local-v2
++    image: ${DEVNET_SETUP_IMAGE:-devnet-setup:local-v2}
+     container_name: setup-conductor
+     depends_on:
+       op-conductor-0:
+diff --git a/etc/docker/docker-compose.yml b/etc/docker/docker-compose.yml
+index a1bc4f9bc..ae54f599f 100644
+--- a/etc/docker/docker-compose.yml
++++ b/etc/docker/docker-compose.yml
+@@ -18,10 +18,11 @@ x-node-healthcheck: &node-healthcheck
+ 
+ services:
+   setup-devnet:
+-    image: devnet-setup:local-v2
++    image: ${DEVNET_SETUP_IMAGE:-devnet-setup:local-v2}
+     build:
+       context: ../..
+       dockerfile: etc/docker/Dockerfile.devnet
++      target: ${DEVNET_SETUP_TARGET:-standard}
+     container_name: setup-devnet
+     env_file: devnet-env
+     volumes:
+@@ -266,6 +267,7 @@ services:
+       - NODE_HEALTHCHECK_HTTP_PORT=${L2_BUILDER_HTTP_PORT}
+       - NODE_HEALTHCHECK_CL_RPC_PORT=${L2_BUILDER_CL_RPC_PORT}
+       - OTEL_SERVICE_NAME=base-builder
++      - BUILDER_ENABLE_RESOURCE_METERING=${L2_BUILDER_ENABLE_RESOURCE_METERING:-true}
+       - BUILDER_TRANSACTION_EVENTS_ENABLED=true
+       - BUILDER_TRANSACTION_EVENTS_PATH=/var/log/transaction-events/base-builder/events.jsonl
+       - BUILDER_TRANSACTION_EVENTS_NETWORK=base-devnet
+@@ -296,7 +298,6 @@ services:
+       - --bootnodes=${L2_EL_BOOTNODE_ENODE}
+       - --rollup.discovery.v4
+       - --metrics=0.0.0.0:${L2_BUILDER_METRICS_PORT}
+-      - --builder.enable-resource-metering
+       - --builder.predicate-eval-hard-cutoff-ms=${L2_BUILDER_PREDICATE_EVAL_HARD_CUTOFF_MS:-10}
+       - --txpool.nolocals
+       - --rollup.txpool-max-inflight-delegated-slots=32768
+diff --git a/etc/docker/everest-contracts/DevnetGenesis.s.sol b/etc/docker/everest-contracts/DevnetGenesis.s.sol
+new file mode 100644
+index 000000000..a5e7a28a4
+--- /dev/null
++++ b/etc/docker/everest-contracts/DevnetGenesis.s.sol
+@@ -0,0 +1,94 @@
++// SPDX-License-Identifier: MIT
++pragma solidity 0.8.15;
++
++import { SystemDeploy } from "scripts/deploy/SystemDeploy.s.sol";
++import { L2Genesis } from "scripts/L2Genesis.s.sol";
++import { Fork } from "scripts/libraries/Config.sol";
++import { Types } from "scripts/libraries/Types.sol";
++import { Hash, Proposal } from "src/libraries/bridge/Types.sol";
++
++/// @dev Calls the pinned release's deployer in the offline genesis VM. The default
++/// execution devnet has no proof producers and does not register a dispute game.
++contract DevnetL1 is SystemDeploy {
++    function build(
++        uint256 l1ChainId, uint256 l2ChainId, address owner, address batcher, address sequencer,
++        uint64 gasLimit, bytes32 salt, uint32 baseFeeScalar, uint32 blobFeeScalar
++    ) external returns (string memory) {
++        vm.chainId(l1ChainId);
++        DeployInput memory input;
++        input.implementationsInput.withdrawalDelaySeconds = 302400;
++        input.implementationsInput.proofMaturityDelaySeconds = 604800;
++        input.implementationsInput.disputeGameFinalityDelaySeconds = 302400;
++        input.implementationsInput.guardian = owner;
++        input.opChainInput.roles = Types.Roles(owner, owner, batcher, sequencer, address(0));
++        input.opChainInput.basefeeScalar = baseFeeScalar;
++        input.opChainInput.blobBasefeeScalar = blobFeeScalar;
++        input.opChainInput.l2ChainId = l2ChainId;
++        input.opChainInput.startingAnchorRoot = Proposal(Hash.wrap(bytes32(uint256(1))), 0);
++        input.opChainInput.saltMixer = vm.toString(salt);
++        input.opChainInput.gasLimit = gasLimit;
++        input.opChainInput.initialMinimumProtocolVersion = 1 << 32;
++        DeployOutput memory out = deploy(input);
++        return addresses(out);
++    }
++
++    /// @dev Names match op-deployer's l1-addresses.json. OP-only contracts stay absent.
++    function addresses(DeployOutput memory out) internal returns (string memory) {
++        Types.DeployOutput memory c = out.opChain;
++        Types.Implementations memory i = out.impls;
++        string memory k = "l1";
++        vm.serializeAddress(k, "OpChainProxyAdminImpl", address(c.opChainProxyAdmin));
++        vm.serializeAddress(k, "AddressManagerImpl", address(c.addressManager));
++        vm.serializeAddress(k, "L1ERC721BridgeProxy", address(c.l1ERC721BridgeProxy));
++        vm.serializeAddress(k, "SystemConfigProxy", address(c.systemConfigProxy));
++        vm.serializeAddress(k, "OptimismMintableERC20FactoryProxy", address(c.optimismMintableERC20FactoryProxy));
++        vm.serializeAddress(k, "L1StandardBridgeProxy", address(c.l1StandardBridgeProxy));
++        vm.serializeAddress(k, "L1CrossDomainMessengerProxy", address(c.l1CrossDomainMessengerProxy));
++        vm.serializeAddress(k, "OptimismPortalProxy", address(c.optimismPortalProxy));
++        vm.serializeAddress(k, "DisputeGameFactoryProxy", address(c.disputeGameFactoryProxy));
++        vm.serializeAddress(k, "AnchorStateRegistryProxy", address(c.anchorStateRegistryProxy));
++        vm.serializeAddress(k, "DelayedWethPermissionlessGameProxy", address(c.delayedWETHProxy));
++        vm.serializeAddress(k, "ProtocolVersionsProxy", address(c.protocolVersionsProxy));
++        vm.serializeAddress(k, "L1ERC721BridgeImpl", i.l1ERC721BridgeImpl);
++        vm.serializeAddress(k, "OptimismPortalImpl", i.optimismPortalImpl);
++        vm.serializeAddress(k, "SystemConfigImpl", i.systemConfigImpl);
++        vm.serializeAddress(k, "OptimismMintableERC20FactoryImpl", i.optimismMintableERC20FactoryImpl);
++        vm.serializeAddress(k, "L1CrossDomainMessengerImpl", i.l1CrossDomainMessengerImpl);
++        vm.serializeAddress(k, "L1StandardBridgeImpl", i.l1StandardBridgeImpl);
++        vm.serializeAddress(k, "DisputeGameFactoryImpl", i.disputeGameFactoryImpl);
++        vm.serializeAddress(k, "AnchorStateRegistryImpl", i.anchorStateRegistryImpl);
++        vm.serializeAddress(k, "DelayedWethImpl", i.delayedWETHImpl);
++        return vm.serializeAddress(k, "ProtocolVersionsImpl", i.protocolVersionsImpl);
++    }
++}
++
++contract DevnetL2 is L2Genesis {
++    function build(
++        uint256 l1ChainId, uint256 l2ChainId, address owner, address payable messenger,
++        address payable bridge, address payable erc721Bridge, uint256 minWithdrawal, bool fundAccounts
++    ) external {
++        Input memory input;
++        input.l1ChainID = l1ChainId;
++        input.l2ChainID = l2ChainId;
++        input.l1CrossDomainMessengerProxy = messenger;
++        input.l1StandardBridgeProxy = bridge;
++        input.l1ERC721BridgeProxy = erc721Bridge;
++        input.opChainProxyAdminOwner = owner;
++        input.sequencerFeeVaultRecipient = owner;
++        input.baseFeeVaultRecipient = owner;
++        input.l1FeeVaultRecipient = owner;
++        input.operatorFeeVaultRecipient = owner;
++        input.sequencerFeeVaultMinimumWithdrawalAmount = minWithdrawal;
++        input.baseFeeVaultMinimumWithdrawalAmount = minWithdrawal;
++        input.l1FeeVaultMinimumWithdrawalAmount = minWithdrawal;
++        input.operatorFeeVaultMinimumWithdrawalAmount = minWithdrawal;
++        // The devnet pays fees on L2 (LOCAL), not via withdrawals to L1.
++        input.sequencerFeeVaultWithdrawalNetwork = 1;
++        input.baseFeeVaultWithdrawalNetwork = 1;
++        input.l1FeeVaultWithdrawalNetwork = 1;
++        input.operatorFeeVaultWithdrawalNetwork = 1;
++        input.fork = uint256(Fork.JOVIAN);
++        input.fundDevAccounts = fundAccounts;
++        run(input);
++    }
++}
+diff --git a/etc/docker/everest-contracts/deploy.go b/etc/docker/everest-contracts/deploy.go
+new file mode 100644
+index 000000000..78d273349
+--- /dev/null
++++ b/etc/docker/everest-contracts/deploy.go
+@@ -0,0 +1,101 @@
++// Compiled into the Everest setup image in place of op-deployer's OP-specific
++// deployment phase. Genesis headers, rollup config and beacon setup are shared.
++package main
++
++import (
++	"encoding/json"
++	"fmt"
++	"math/big"
++	"os"
++
++	"github.com/ethereum-optimism/optimism/op-chain-ops/addresses"
++	"github.com/ethereum-optimism/optimism/op-chain-ops/foundry"
++	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
++	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/broadcaster"
++	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
++	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/pipeline"
++	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
++	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
++	scriptenv "github.com/ethereum-optimism/optimism/op-deployer/pkg/env"
++	"github.com/ethereum/go-ethereum/common"
++	"github.com/ethereum/go-ethereum/log"
++)
++
++type devnetL1 struct {
++	Build func(*big.Int, *big.Int, common.Address, common.Address, common.Address, uint64, [32]byte, uint32, uint32) (string, error)
++}
++
++type devnetL2 struct {
++	Build func(*big.Int, *big.Int, common.Address, common.Address, common.Address, common.Address, *big.Int, bool) error
++}
++
++func deploy(intent *state.Intent, st *state.State, logger log.Logger, _ string) error {
++	if err := intent.Check(); err != nil {
++		return err
++	}
++	if len(intent.Chains) != 1 {
++		return fmt.Errorf("Everest requires a single-chain intent")
++	}
++	chain := intent.Chains[0]
++	artifactDir := os.Getenv("BASE_DEVNET_ARTIFACTS")
++	if artifactDir == "" {
++		return fmt.Errorf("missing pinned Everest contract artifacts")
++	}
++	fs := os.DirFS(artifactDir).(foundry.StatDirFs)
++	deployer := common.Address{0x01}
++	newHost := func() (*script.Host, error) {
++		return scriptenv.DefaultScriptHost(broadcaster.NoopBroadcaster(), logger, deployer, fs)
++	}
++	l1, err := newHost()
++	if err != nil {
++		return err
++	}
++	if err := pipeline.InitGenesisStrategy(&pipeline.Env{Logger: logger}, intent, st); err != nil {
++		return err
++	}
++	l1Script, cleanup, err := script.WithScript[devnetL1](l1, "DevnetGenesis.s.sol", "DevnetL1")
++	if err != nil {
++		return err
++	}
++	encoded, err := l1Script.Build(intent.L1ChainIDBig(), chain.ID.Big(), chain.Roles.L1ProxyAdminOwner, chain.Roles.Batcher, chain.Roles.UnsafeBlockSigner, chain.GasLimit, st.Create2Salt, standard.BasefeeScalar, standard.BlobBaseFeeScalar)
++	cleanup()
++	if err != nil {
++		return fmt.Errorf("deploy Base L1 contracts: %w", err)
++	}
++	var contracts addresses.L1Contracts
++	if err := json.Unmarshal([]byte(encoded), &contracts); err != nil {
++		return fmt.Errorf("decode Base L1 deployment: %w", err)
++	}
++	if err := opcm.InsertPreinstalls(l1); err != nil {
++		return err
++	}
++	l1.Wipe(deployer)
++	l1Dump, err := l1.StateDump()
++	if err != nil {
++		return err
++	}
++	l2, err := newHost()
++	if err != nil {
++		return err
++	}
++	l2Script, cleanup, err := script.WithScript[devnetL2](l2, "DevnetGenesis.s.sol", "DevnetL2")
++	if err != nil {
++		return err
++	}
++	err = l2Script.Build(intent.L1ChainIDBig(), chain.ID.Big(), chain.Roles.L2ProxyAdminOwner, contracts.L1CrossDomainMessengerProxy, contracts.L1StandardBridgeProxy, contracts.L1Erc721BridgeProxy, standard.VaultMinWithdrawalAmount.ToInt(), intent.FundDevAccounts)
++	cleanup()
++	if err != nil {
++		return fmt.Errorf("initialize Base L2 predeploys: %w", err)
++	}
++	l2.Wipe(deployer)
++	l2Dump, err := l2.StateDump()
++	if err != nil {
++		return err
++	}
++	st.SuperchainDeployment = &contracts.SuperchainContracts
++	st.ImplementationsDeployment = &contracts.ImplementationsContracts
++	st.Chains = []*state.ChainState{{ID: chain.ID, OpChainContracts: contracts.OpChainContracts, Allocs: &state.GzipData[foundry.ForgeAllocs]{Data: l2Dump}}}
++	st.L1StateDump = &state.GzipData[foundry.ForgeAllocs]{Data: l1Dump}
++	st.AppliedIntent = intent
++	return nil
++}
+diff --git a/etc/docker/everest-contracts/deploy_test.go b/etc/docker/everest-contracts/deploy_test.go
+new file mode 100644
+index 000000000..a84c1f585
+--- /dev/null
++++ b/etc/docker/everest-contracts/deploy_test.go
+@@ -0,0 +1,54 @@
++package main
++
++import (
++	"bytes"
++	"encoding/json"
++	"fmt"
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/ethereum-optimism/optimism/op-chain-ops/foundry"
++	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
++	"github.com/ethereum/go-ethereum/common"
++	"github.com/ethereum/go-ethereum/log"
++	"github.com/stretchr/testify/require"
++)
++
++func TestEverestContractGenesis(t *testing.T) {
++	for i, role := range []string{"DEPLOYER_ADDR", "SEQUENCER_ADDR", "BATCHER_ADDR", "PROPOSER_ADDR", "CHALLENGER_ADDR"} {
++		t.Setenv(role, fmt.Sprintf("0x%040x", 100+i))
++	}
++	intent, err := baseIntent("1337", 84538453)
++	require.NoError(t, err)
++	st := &state.State{Version: 1}
++	require.NoError(t, deploy(intent, st, log.New(), ""))
++	implSlot := common.HexToHash("0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc")
++	checkProxy := func(name string, alloc *foundry.ForgeAllocs, proxy, impl common.Address) {
++		t.Helper()
++		require.NotEmpty(t, alloc.Accounts[proxy].Code, name)
++		require.Equal(t, common.BytesToHash(impl.Bytes()), alloc.Accounts[proxy].Storage[implSlot], name)
++		artifact, err := foundry.ReadArtifact(filepath.Join(os.Getenv("BASE_DEVNET_ARTIFACTS"), name+".sol", name+".json"))
++		require.NoError(t, err)
++		got := alloc.Accounts[impl].Code
++		want := bytes.Clone(artifact.DeployedBytecode.Object)
++		require.NotEmpty(t, want, name)
++		require.Len(t, got, len(want), name)
++		// Constructors fill only these compiler-declared offsets at deployment.
++		var refs map[string][]struct{ Start, Length int }
++		if raw := artifact.DeployedBytecode.ImmutableReferences; len(raw) > 0 {
++			require.NoError(t, json.Unmarshal(raw, &refs))
++		}
++		for _, offsets := range refs {
++			for _, r := range offsets {
++				end := r.Start + r.Length
++				copy(want[r.Start:end], got[r.Start:end])
++			}
++		}
++		require.True(t, bytes.Equal(want, got), "%s implementation differs from the release artifact", name)
++	}
++	chain := st.Chains[0]
++	checkProxy("SystemConfig", st.L1StateDump.Data, chain.SystemConfigProxy, st.ImplementationsDeployment.SystemConfigImpl)
++	checkProxy("L2StandardBridge", chain.Allocs.Data, common.HexToAddress("0x4200000000000000000000000000000000000010"), common.HexToAddress("0xc0d3c0d3c0d3c0d3c0d3c0d3c0d3c0d3c0d30010"))
++	checkProxy("BaseTime", chain.Allocs.Data, common.HexToAddress("0x4200000000000000000000000000000000000030"), common.HexToAddress("0xc0d3c0d3c0d3c0d3c0d3c0d3c0d3c0d3c0d30030"))
++}
