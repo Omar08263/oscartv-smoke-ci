@@ -19,13 +19,38 @@ PROXY_URL = "http://host.docker.internal:18545"
 L1_EL_URL = "http://l1-el:${L1_HTTP_PORT}"
 
 
+def bool_safe_loader():
+    """A SafeLoader that does NOT resolve YAML 1.1 booleans.
+
+    The shadow validator's command contains the bare word ``Off`` (the
+    value of ``--p2p.scoring``). PyYAML's default loader resolves it to
+    the boolean False, and re-dumping writes ``false`` — which Docker
+    Compose (YAML 1.2) then rejects with "command.N must be a string".
+    With bool resolution disabled, ``Off`` stays the string "Off", which
+    is exactly what the node's CLI expects and what Compose accepts
+    (the base compose file itself carries ``- Off`` unquoted).
+    """
+    loader = yaml.SafeLoader
+    for ch in list(loader.yaml_implicit_resolvers):
+        loader.yaml_implicit_resolvers[ch] = [
+            (tag, regexp)
+            for tag, regexp in loader.yaml_implicit_resolvers[ch]
+            if tag != "tag:yaml.org,2002:bool"
+        ]
+    return loader
+
+
 def main():
     src, dst = sys.argv[1], sys.argv[2]
     with open(src) as f:
-        doc = yaml.safe_load(f)
+        doc = yaml.load(f, Loader=bool_safe_loader())
     svc = doc["services"]["base-shadow-validator"]
     cmd = list(svc["command"])
     assert "--l1-eth-rpc" in cmd, "shadow validator command has no --l1-eth-rpc"
+    assert all(isinstance(x, str) for x in cmd), (
+        "non-string command item after bool-safe load: "
+        + repr([x for x in cmd if not isinstance(x, str)])
+    )
     i = cmd.index("--l1-eth-rpc")
     assert cmd[i + 1] == L1_EL_URL, f"unexpected L1 URL: {cmd[i + 1]!r}"
     cmd[i + 1] = PROXY_URL

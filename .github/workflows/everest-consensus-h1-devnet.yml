@@ -101,6 +101,9 @@ jobs:
             etc/docker/docker-compose.yml etc/docker/docker-compose.h1-override.yml
           docker compose --env-file etc/docker/devnet-env \
             -f etc/docker/docker-compose.yml -f etc/docker/docker-compose.h1-override.yml \
+            config -q
+          docker compose --env-file etc/docker/devnet-env \
+            -f etc/docker/docker-compose.yml -f etc/docker/docker-compose.h1-override.yml \
             up -d base-shadow-validator
           docker compose --env-file etc/docker/devnet-env \
             -f etc/docker/docker-compose.yml -f etc/docker/docker-compose.h1-override.yml ps
