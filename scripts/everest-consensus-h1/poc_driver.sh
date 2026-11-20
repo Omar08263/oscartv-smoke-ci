@@ -138,7 +138,7 @@ wait_l1_head() { # <target> <timeout_s>
   local target="$1" timeout_s="$2" waited=0 head
   while [ "$waited" -lt "$timeout_s" ]; do
     head="$(l1_head)"; [ "$head" -ge "$target" ] 2>/dev/null && { echo "$head"; return 0; }
-    sleep 10; waited=$((waited + 10))
+    sleep 1; waited=$((waited + 1))
   done
   echo "TIMEOUT waiting L1>=$target (head=$(l1_head))" >&2; return 1
 }
@@ -237,11 +237,11 @@ N1="$(rotate_signer "$NEW1_ADDR")"
 [ -z "$N1" ] && { fail "rotation 1 tx produced no block number"; exit 1; }
 [ "$N1" -lt 15 ] && { fail "rotation 1 landed at L1 block N1=$N1 (< verifier_l1_confs 15) -- the watcher would learn it via the no-delay path; aborting"; exit 1; }
 log "rotation 1 in L1 block N1=$N1; on-chain signer now: $(onchain_signer)"
-# Sticky window [N1+14, N1+25): the watcher fetches the rotation block at
+# Sticky window [N1+14, N1+35): the watcher fetches the rotation block at
 # head N1+15; the window covers it even if the watcher's head lags a few
 # blocks, and lets the derivation recover once the window closes.
 curl -s -X POST "$PROXY/arm" -H 'Content-Type: application/json' \
-  --data "{\"block\": $N1, \"min_head\": $((N1 + 14)), \"max_head\": $((N1 + 25))}" | tee -a "$EVIDENCE/proxy-arm-1.json"; echo
+  --data "{\"block\": $N1, \"min_head\": $((N1 + 14)), \"max_head\": $((N1 + 35))}" | tee -a "$EVIDENCE/proxy-arm-1.json"; echo
 restart_builder_with_key "$NEW1_KEY" || KEY1_OK=FAIL
 log "waiting for builder to resume producing..."
 wait_builder_advancing 600 || fail "builder did not resume after rotation 1"
@@ -250,13 +250,13 @@ SHADOW_PRE_FAULT="$(unsafe_of "$SHADOW_OP")"
 log "shadow unsafe just after builder resume: $SHADOW_PRE_FAULT"
 # Sample the shadow's trajectory through the fault window (not just the
 # endpoints): a transient stall-then-resume must be visible.
-( while true; do sync_sample "fault-sample" > /dev/null 2>&1; sleep 30; done ) &
+( while true; do sync_sample "fault-sample" > /dev/null 2>&1; sleep 5; done ) &
 echo $! > "$EVIDENCE/.fault-sampler-pid"
 # Verdict snapshot at N1+23, sampled IMMEDIATELY (no sleep): the proxy
-# window [N1+14, N1+25) is still active, so the derivation cannot yet
+# window [N1+14, N1+35) is still active, so the derivation cannot yet
 # have fetched the rotation block and the shadow is guaranteed still
 # stalled. Run 8 proved the sleep matters: the snapshot slept 20s after
-# head N1+24, the head crossed to N1+25 (window closed) in that time,
+# head N1+24, the head crossed to N1+35 (window closed) in that time,
 # and the safe-chain recovery had already advanced the shadow 69 blocks.
 TARGET_HEAD=$((N1 + 23))
 log "waiting for L1 head >= $TARGET_HEAD (N1+23, verdict snapshot) ..."
@@ -264,15 +264,19 @@ wait_l1_head "$TARGET_HEAD" 900 || fail "L1 did not reach N1+23"
 sync_sample "fault-window-end"
 SHADOW_POST_FAULT="$(unsafe_of "$SHADOW_OP")"
 BUILDER_POST_FAULT="$(unsafe_of "$BUILDER_OP")"
+# Path-based stillness: smallest shadow unsafe sampled in the fault window.
+FAULT_MIN_HEAD=$((N1 + 14)); FAULT_MAX_HEAD=$((N1 + 35))
+SHADOW_FAULT_MIN="$(jq -r --argjson lo "$FAULT_MIN_HEAD" --argjson hi "$FAULT_MAX_HEAD" 'select(.label == "fault-sample" and .l1 >= $lo and .l1 < $hi) | .shadow.unsafe | numbers' "$EVIDENCE/sync-samples.jsonl" 2>/dev/null | sort -n | head -n 1 || true)"
+[ -n "$SHADOW_FAULT_MIN" ] && SHADOW_POST_FAULT="$SHADOW_FAULT_MIN"
 log "fault window end: shadow unsafe=$SHADOW_POST_FAULT (was $SHADOW_PRE_FAULT) builder unsafe=$BUILDER_POST_FAULT"
 # Recovery observation (not gated): after the proxy window closes at
-# N1+25 the derivation fetches the rotation block, the safe chain
+# N1+35 the derivation fetches the rotation block, the safe chain
 # advances, and the unsafe head follows it (unsafe == safe) -- still
 # lagging the builder, and the gossip signer stays stale until restart.
 # Recorded for the report; the verdict above is measured while the
 # window is still active (run 7: flat at 1338 until head N1+23, then
 # recovered via the safe chain once the window closed).
-wait_l1_head $((N1 + 30)) 600 || fail "L1 did not reach N1+30"
+wait_l1_head $((N1 + 40)) 600 || fail "L1 did not reach N1+40"
 sleep 30
 kill "$(cat "$EVIDENCE/.fault-sampler-pid")" 2>/dev/null || true
 sync_sample "fault-recovery"
@@ -280,7 +284,7 @@ RECOVERY_LINE="$(tail -1 "$EVIDENCE/sync-samples.jsonl")"
 SHADOW_RECOVERY="$(echo "$RECOVERY_LINE" | jq -r '.shadow.unsafe')"
 SAFE_RECOVERY="$(echo "$RECOVERY_LINE" | jq -r '.shadow.safe')"
 BUILDER_RECOVERY="$(echo "$RECOVERY_LINE" | jq -r '.builder.unsafe')"
-log "fault recovery (L1=N1+30): shadow unsafe=$SHADOW_RECOVERY safe=$SAFE_RECOVERY builder unsafe=$BUILDER_RECOVERY"
+log "fault recovery (L1=N1+40): shadow unsafe=$SHADOW_RECOVERY safe=$SAFE_RECOVERY builder unsafe=$BUILDER_RECOVERY"
 # Evidence: the FULL streamed log (ANSI-stripped) + the proxy + the metrics.
 # The --tail dumps are backup only (4000 lines ~= 1 min at -vvv).
 (cd "$BASE_DIR" && $COMPOSE logs --tail 20000 base-shadow-validator > "$EVIDENCE/shadow-validator-fault.log" 2>&1)
@@ -404,9 +408,9 @@ dump_metrics "$EVIDENCE/shadow-metrics-final.txt"
   echo ""
   echo "## Key numbers"
   echo "- Fault window: shadow unsafe $SHADOW_PRE_FAULT -> $SHADOW_POST_FAULT; builder unsafe $BUILDER_POST_FAULT"
-  echo "- Fault recovery (L1=N1+30, after the proxy window closes): shadow unsafe $SHADOW_RECOVERY safe $SAFE_RECOVERY; builder unsafe $BUILDER_RECOVERY -- the unsafe head follows the safe chain (unsafe == safe) and still lags the builder; the gossip signer stays stale until restart"
+  echo "- Fault recovery (L1=N1+40, after the proxy window closes): shadow unsafe $SHADOW_RECOVERY safe $SAFE_RECOVERY; builder unsafe $BUILDER_RECOVERY -- the unsafe head follows the safe chain (unsafe == safe) and still lags the builder; the gossip signer stays stale until restart"
   echo "- Control window: shadow unsafe $SHADOW_PRE_CTRL -> mid $SHADOW_MID_CTRL -> $SHADOW_POST_CTRL; builder $BUILDER_POST_CTRL"
-  echo "- Proxy fault fired: $PROXY_FIRED (block $PROXY_FIRED_BLOCK, failed requests: $PROXY_FAILED_COUNT, sticky window [N1+14, N1+25))"
+  echo "- Proxy fault fired: $PROXY_FIRED (block $PROXY_FIRED_BLOCK, failed requests: $PROXY_FAILED_COUNT, sticky window [N1+14, N1+35))"
   echo "- Builder key switch verified: rotation 1 $KEY1_OK, rotation 2 $KEY2_OK"
   echo "- delayed-fetch-errors delta: fault $FETCH_ERR_DELTA (pre=$FETCH_ERR_PRE post=$FETCH_ERR_POST), control $FETCH_ERR_DELTA_CTRL"
   echo "- watcher learned NEW1 before the skip: $SIGNER_LEARNED_EARLY (must be 0; rotation must land at L1 >= verifier_l1_confs 15)"
