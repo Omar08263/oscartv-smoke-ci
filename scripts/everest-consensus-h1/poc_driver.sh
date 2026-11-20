@@ -190,6 +190,7 @@ restart_builder_with_key() { # <key-no-0x> — returns 0 only if the new key is 
 
 VERDICT_FAULT=FAIL; VERDICT_HEAL=FAIL; VERDICT_CONTROL=FAIL
 KEY1_OK=PASS; KEY2_OK=PASS  # flipped to FAIL if the builder key switch is not verified
+SHADOW_RECOVERY=""; SAFE_RECOVERY=""; BUILDER_RECOVERY=""  # set in Phase 1 (recovery observation)
 
 # ---------------- Phase 0: baseline ----------------
 log "== Phase 0: baseline =="
@@ -251,15 +252,30 @@ log "shadow unsafe just after builder resume: $SHADOW_PRE_FAULT"
 # endpoints): a transient stall-then-resume must be visible.
 ( while true; do sync_sample "fault-sample" > /dev/null 2>&1; sleep 30; done ) &
 echo $! > "$EVIDENCE/.fault-sampler-pid"
-TARGET_HEAD=$((N1 + 30))
-log "waiting for L1 head >= $TARGET_HEAD (N1+30) ..."
-wait_l1_head "$TARGET_HEAD" 900 || fail "L1 did not reach N1+30"
-sleep 30  # let the last gossip validations settle
-kill "$(cat "$EVIDENCE/.fault-sampler-pid")" 2>/dev/null || true
+TARGET_HEAD=$((N1 + 24))
+log "waiting for L1 head >= $TARGET_HEAD (N1+24, verdict snapshot) ..."
+wait_l1_head "$TARGET_HEAD" 900 || fail "L1 did not reach N1+24"
+sleep 20
 sync_sample "fault-window-end"
 SHADOW_POST_FAULT="$(unsafe_of "$SHADOW_OP")"
 BUILDER_POST_FAULT="$(unsafe_of "$BUILDER_OP")"
 log "fault window end: shadow unsafe=$SHADOW_POST_FAULT (was $SHADOW_PRE_FAULT) builder unsafe=$BUILDER_POST_FAULT"
+# Recovery observation (not gated): after the proxy window closes at
+# N1+25 the derivation fetches the rotation block, the safe chain
+# advances, and the unsafe head follows it (unsafe == safe) -- still
+# lagging the builder, and the gossip signer stays stale until restart.
+# Recorded for the report; the verdict above is measured while the
+# window is still active (run 7: flat at 1338 until head N1+23, then
+# recovered via the safe chain once the window closed).
+wait_l1_head $((N1 + 30)) 600 || fail "L1 did not reach N1+30"
+sleep 30
+kill "$(cat "$EVIDENCE/.fault-sampler-pid")" 2>/dev/null || true
+sync_sample "fault-recovery"
+RECOVERY_LINE="$(tail -1 "$EVIDENCE/sync-samples.jsonl")"
+SHADOW_RECOVERY="$(echo "$RECOVERY_LINE" | jq -r '.shadow.unsafe')"
+SAFE_RECOVERY="$(echo "$RECOVERY_LINE" | jq -r '.shadow.safe')"
+BUILDER_RECOVERY="$(echo "$RECOVERY_LINE" | jq -r '.builder.unsafe')"
+log "fault recovery (L1=N1+30): shadow unsafe=$SHADOW_RECOVERY safe=$SAFE_RECOVERY builder unsafe=$BUILDER_RECOVERY"
 # Evidence: the FULL streamed log (ANSI-stripped) + the proxy + the metrics.
 # The --tail dumps are backup only (4000 lines ~= 1 min at -vvv).
 (cd "$BASE_DIR" && $COMPOSE logs --tail 20000 base-shadow-validator > "$EVIDENCE/shadow-validator-fault.log" 2>&1)
@@ -293,6 +309,7 @@ if [ "$PROXY_FIRED" = "true" ] && [ "$PROXY_FIRED_BLOCK" = "$N1" ] \
    && [ "$FETCH_ERR_DELTA" -ge 1 ] \
    && [ "$SKIP_N1" -ge 1 ] \
    && [ "$SIGNER_LEARNED_EARLY" = "0" ] \
+   && [ "$SIGNER_METRIC_FAULT" -ge 1 ] \
    && [ -n "$SHADOW_PRE_FAULT" ] && [ -n "$SHADOW_POST_FAULT" ] \
    && [ "$((SHADOW_POST_FAULT - SHADOW_PRE_FAULT))" -le 2 ] \
    && [ -n "$BUILDER_POST_FAULT" ] && [ "$BUILDER_POST_FAULT" -gt "$((SHADOW_POST_FAULT + 20))" ]; then
@@ -382,6 +399,7 @@ dump_metrics "$EVIDENCE/shadow-metrics-final.txt"
   echo ""
   echo "## Key numbers"
   echo "- Fault window: shadow unsafe $SHADOW_PRE_FAULT -> $SHADOW_POST_FAULT; builder unsafe $BUILDER_POST_FAULT"
+  echo "- Fault recovery (L1=N1+30, after the proxy window closes): shadow unsafe $SHADOW_RECOVERY safe $SAFE_RECOVERY; builder unsafe $BUILDER_RECOVERY -- the unsafe head follows the safe chain (unsafe == safe) and still lags the builder; the gossip signer stays stale until restart"
   echo "- Control window: shadow unsafe $SHADOW_PRE_CTRL -> mid $SHADOW_MID_CTRL -> $SHADOW_POST_CTRL; builder $BUILDER_POST_CTRL"
   echo "- Proxy fault fired: $PROXY_FIRED (block $PROXY_FIRED_BLOCK, failed requests: $PROXY_FAILED_COUNT, sticky window [N1+14, N1+25))"
   echo "- Builder key switch verified: rotation 1 $KEY1_OK, rotation 2 $KEY2_OK"
