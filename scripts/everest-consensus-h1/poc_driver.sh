@@ -252,10 +252,15 @@ log "shadow unsafe just after builder resume: $SHADOW_PRE_FAULT"
 # endpoints): a transient stall-then-resume must be visible.
 ( while true; do sync_sample "fault-sample" > /dev/null 2>&1; sleep 30; done ) &
 echo $! > "$EVIDENCE/.fault-sampler-pid"
-TARGET_HEAD=$((N1 + 24))
-log "waiting for L1 head >= $TARGET_HEAD (N1+24, verdict snapshot) ..."
-wait_l1_head "$TARGET_HEAD" 900 || fail "L1 did not reach N1+24"
-sleep 20
+# Verdict snapshot at N1+23, sampled IMMEDIATELY (no sleep): the proxy
+# window [N1+14, N1+25) is still active, so the derivation cannot yet
+# have fetched the rotation block and the shadow is guaranteed still
+# stalled. Run 8 proved the sleep matters: the snapshot slept 20s after
+# head N1+24, the head crossed to N1+25 (window closed) in that time,
+# and the safe-chain recovery had already advanced the shadow 69 blocks.
+TARGET_HEAD=$((N1 + 23))
+log "waiting for L1 head >= $TARGET_HEAD (N1+23, verdict snapshot) ..."
+wait_l1_head "$TARGET_HEAD" 900 || fail "L1 did not reach N1+23"
 sync_sample "fault-window-end"
 SHADOW_POST_FAULT="$(unsafe_of "$SHADOW_OP")"
 BUILDER_POST_FAULT="$(unsafe_of "$BUILDER_OP")"
