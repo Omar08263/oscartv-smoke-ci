@@ -222,8 +222,19 @@ log "== Phase 1: FAULT rotation =="
 start_log_streams
 FETCH_ERR_PRE="$(delayed_fetch_errors)"
 log "delayed-fetch-errors baseline (before fault): $FETCH_ERR_PRE"
+# The rotation MUST land at an L1 block >= verifier_l1_confs (15). For
+# heads below the confirmation depth the watcher scans the head block's
+# logs directly (derivation_block = head, no delayed fetch), so a rotation
+# at block < 15 is learned immediately and the fault can never matter.
+# Run 44732613126 proved it: rotation at block 7 was learned 3s after
+# mining (12:26:48, "Unsafe block signer update signer=0x2361..."),
+# 4 min BEFORE the delayed-fetch skip at 12:30:48 -- the shadow never
+# stalled even though the fault, the skip and the key switch all worked.
+log "waiting for L1 head >= 20 so the rotation lands above the confirmation depth..."
+wait_l1_head 20 600 || fail "L1 did not reach 20 before the fault rotation"
 N1="$(rotate_signer "$NEW1_ADDR")"
 [ -z "$N1" ] && { fail "rotation 1 tx produced no block number"; exit 1; }
+[ "$N1" -lt 15 ] && { fail "rotation 1 landed at L1 block N1=$N1 (< verifier_l1_confs 15) -- the watcher would learn it via the no-delay path; aborting"; exit 1; }
 log "rotation 1 in L1 block N1=$N1; on-chain signer now: $(onchain_signer)"
 # Sticky window [N1+14, N1+25): the watcher fetches the rotation block at
 # head N1+15; the window covers it even if the watcher's head lags a few
@@ -258,6 +269,10 @@ SKIP_COUNT="$(strip_ansi < "$SHADOW_FULL" | grep -c "Failed to fetch delayed L1 
 SKIP_N1="$(strip_ansi < "$SHADOW_FULL" | grep "Failed to fetch delayed L1 block; skipping head update" | grep -c "target=$N1" || true)"
 SIGNER_REJ="$(strip_ansi < "$SHADOW_FULL" | grep -ci "invalid_signer" || true)"
 SIGNER_METRIC_FAULT="$(invalid_signer_count)"
+# Negative control: the watcher must NOT have learned NEW1 before the skip
+# (it would mean the rotation landed below the confirmation depth and the
+# no-delay path scanned it -- the run-6 failure mode).
+SIGNER_LEARNED_EARLY="$(strip_ansi < "$SHADOW_FULL" | grep -i "Unsafe block signer update" | grep -ci "${NEW1_ADDR}" || true)"
 FETCH_ERR_POST="$(delayed_fetch_errors)"
 FETCH_ERR_DELTA=$((FETCH_ERR_POST - FETCH_ERR_PRE))
 dump_metrics "$EVIDENCE/shadow-metrics-fault.txt"
@@ -266,7 +281,10 @@ echo "$PROXY_STATUS" > "$EVIDENCE/proxy-status-fault.json"
 PROXY_FIRED="$(echo "$PROXY_STATUS" | jq -r '.fired')"
 PROXY_FIRED_BLOCK="$(echo "$PROXY_STATUS" | jq -r '.fired_detail.block // empty')"
 PROXY_FAILED_COUNT="$(echo "$PROXY_STATUS" | jq -r '.failed_count // 0')"
-log "fault evidence: proxy fired=$PROXY_FIRED block=$PROXY_FIRED_BLOCK failed_requests=$PROXY_FAILED_COUNT | key_switch=$KEY1_OK | delayed-fetch-errors delta=$FETCH_ERR_DELTA (pre=$FETCH_ERR_PRE post=$FETCH_ERR_POST) | skip-logs=$SKIP_COUNT (target=N1: $SKIP_N1) | invalid_signer lines=$SIGNER_REJ | invalid_signer metric count=$SIGNER_METRIC_FAULT"
+log "fault evidence: proxy fired=$PROXY_FIRED block=$PROXY_FIRED_BLOCK failed_requests=$PROXY_FAILED_COUNT | key_switch=$KEY1_OK | delayed-fetch-errors delta=$FETCH_ERR_DELTA (pre=$FETCH_ERR_PRE post=$FETCH_ERR_POST) | skip-logs=$SKIP_COUNT (target=N1: $SKIP_N1) | watcher learned NEW1 early=$SIGNER_LEARNED_EARLY | invalid_signer lines=$SIGNER_REJ | invalid_signer metric count=$SIGNER_METRIC_FAULT"
+if [ "$SIGNER_LEARNED_EARLY" -ge 1 ]; then
+  log "DIAGNOSIS: watcher learned NEW1 before the skip (rotation landed below the confirmation depth) — a FAIL here is a design violation, NOT a candidate refutation"
+fi
 if [ "$FETCH_ERR_DELTA" -lt 1 ] || [ "$SKIP_N1" -lt 1 ]; then
   log "DIAGNOSIS: fault did NOT reach the watcher (delayed-fetch-errors delta=$FETCH_ERR_DELTA, skip-logs for N1=$SKIP_N1) — a FAIL here is a harness miss, NOT a candidate refutation"
 fi
@@ -274,6 +292,7 @@ if [ "$PROXY_FIRED" = "true" ] && [ "$PROXY_FIRED_BLOCK" = "$N1" ] \
    && [ "$KEY1_OK" = "PASS" ] \
    && [ "$FETCH_ERR_DELTA" -ge 1 ] \
    && [ "$SKIP_N1" -ge 1 ] \
+   && [ "$SIGNER_LEARNED_EARLY" = "0" ] \
    && [ -n "$SHADOW_PRE_FAULT" ] && [ -n "$SHADOW_POST_FAULT" ] \
    && [ "$((SHADOW_POST_FAULT - SHADOW_PRE_FAULT))" -le 2 ] \
    && [ -n "$BUILDER_POST_FAULT" ] && [ "$BUILDER_POST_FAULT" -gt "$((SHADOW_POST_FAULT + 20))" ]; then
@@ -302,6 +321,7 @@ FETCH_ERR_PRE_CTRL="$(delayed_fetch_errors)"
 log "delayed-fetch-errors baseline (before control): $FETCH_ERR_PRE_CTRL"
 N2="$(rotate_signer "$NEW2_ADDR")"
 [ -z "$N2" ] && { fail "rotation 2 tx produced no block number"; exit 1; }
+[ "$N2" -lt 15 ] && { fail "rotation 2 landed at L1 block N2=$N2 (< verifier_l1_confs 15) -- the watcher would learn it via the no-delay path; aborting"; exit 1; }
 log "rotation 2 in L1 block N2=$N2; on-chain signer now: $(onchain_signer)"
 restart_builder_with_key "$NEW2_KEY" || KEY2_OK=FAIL
 wait_builder_advancing 600 || fail "builder did not resume after rotation 2"
@@ -366,6 +386,7 @@ dump_metrics "$EVIDENCE/shadow-metrics-final.txt"
   echo "- Proxy fault fired: $PROXY_FIRED (block $PROXY_FIRED_BLOCK, failed requests: $PROXY_FAILED_COUNT, sticky window [N1+14, N1+25))"
   echo "- Builder key switch verified: rotation 1 $KEY1_OK, rotation 2 $KEY2_OK"
   echo "- delayed-fetch-errors delta: fault $FETCH_ERR_DELTA (pre=$FETCH_ERR_PRE post=$FETCH_ERR_POST), control $FETCH_ERR_DELTA_CTRL"
+  echo "- watcher learned NEW1 before the skip: $SIGNER_LEARNED_EARLY (must be 0; rotation must land at L1 >= verifier_l1_confs 15)"
   echo "- skip-logs for N1: $SKIP_N1 (all skip-logs: $SKIP_COUNT); invalid_signer log lines: $SIGNER_REJ; invalid_signer metric count at fault end: $SIGNER_METRIC_FAULT; skip-logs for N2: $SKIP_N2"
   echo "- Full logs: shadow-validator-full.log / builder-full.log (streamed, whole run); metrics: shadow-metrics-fault.txt / shadow-metrics-control.txt"
 } > "$EVIDENCE/VERDICT.md"
