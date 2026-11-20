@@ -90,8 +90,10 @@ jobs:
       - name: Start fault proxy + re-point shadow validator at it
         run: |
           mkdir -p artifacts
+          # Listen on 0.0.0.0: the node container reaches the host proxy via
+          # the Docker bridge gateway (host.docker.internal), not loopback.
           nohup python3 scripts/everest-consensus-h1/l1_fault_proxy.py \
-            --listen 127.0.0.1:18545 --upstream http://127.0.0.1:4545 \
+            --listen 0.0.0.0:18545 --upstream http://127.0.0.1:4545 \
             --log-file artifacts/proxy.log > artifacts/proxy-stdout.log 2>&1 &
           echo $! > artifacts/proxy.pid
           sleep 3
@@ -105,6 +107,20 @@ jobs:
           docker compose --env-file etc/docker/devnet-env \
             -f etc/docker/docker-compose.yml -f etc/docker/docker-compose.h1-override.yml \
             up -d base-shadow-validator
+          # Prove the proxy is reachable FROM INSIDE the node container
+          # (this is what the startup signer resolution uses). Fail fast
+          # here instead of letting the node crash-loop for 20 minutes.
+          for i in $(seq 1 12); do
+            if docker compose --env-file etc/docker/devnet-env \
+                -f etc/docker/docker-compose.yml -f etc/docker/docker-compose.h1-override.yml \
+                exec -T base-shadow-validator curl -s --max-time 5 http://host.docker.internal:18545/status; then
+              echo; echo "proxy reachable from inside base-shadow-validator"
+              break
+            fi
+            echo "proxy not yet reachable from container (try $i/12); waiting..."
+            sleep 5
+            [ "$i" = 12 ] && { echo "ERROR: proxy unreachable from inside base-shadow-validator"; exit 1; }
+          done
           docker compose --env-file etc/docker/devnet-env \
             -f etc/docker/docker-compose.yml -f etc/docker/docker-compose.h1-override.yml ps
 

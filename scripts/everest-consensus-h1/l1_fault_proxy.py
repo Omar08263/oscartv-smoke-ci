@@ -269,7 +269,13 @@ def make_handler(proxy):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--listen", default="127.0.0.1:18545")
+    # Default 0.0.0.0: the node container reaches the host proxy via the
+    # Docker bridge gateway (host.docker.internal), NOT via loopback — a
+    # 127.0.0.1 bind is unreachable from inside the container (connection
+    # refused; the node then fails its startup signer resolution and
+    # crash-loops). The runner is ephemeral and not publicly reachable,
+    # so binding all interfaces here is acceptable for this PoC.
+    ap.add_argument("--listen", default="0.0.0.0:18545")
     ap.add_argument("--upstream", default="http://127.0.0.1:4545")
     ap.add_argument("--log-file", default=None)
     args = ap.parse_args()
